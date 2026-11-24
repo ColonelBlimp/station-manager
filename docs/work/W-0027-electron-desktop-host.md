@@ -5616,3 +5616,20 @@ Disable TX button and an expired countdown, while a later claim was being repeat
 (another client having taken the old mode meanwhile). The quiet path now takes the banner
 down first: its reason is no longer the daemon's. Test: "a banner already showing is taken
 down when a later claim turns quiet", seen to fail before the one-line change.
+
+### The close question's FT8 line, reworded after its first sight in the real app (2026-11-24)
+
+The operator's screenshot, taken on FT4 with TX enabled, is the first time the question was
+seen in the real app with TX enabled: "Close Station Manager?", Close and Cancel. Its line
+read "FT8 will be stopped and transmit disarmed." while the mode was FT4, and "disarmed"
+where the page's button says "Disable TX". On his direction ("Then fix the close msg") the two
+FT8 lines become:
+
+- "FT8/FT4 will be stopped and TX disabled."
+- "The state of FT8/FT4 could not be read. If it is running, it will be stopped."
+
+`GET /v1/ft8/state` does not say which of the two modes is in use, so the line names both, as
+the Settings tab does; naming the one in use would need that fact added to the daemon's
+answer, and is not built. The words in the criteria section above are the record of what was
+ruled then and are left as written. `desktop/src/closing.mjs`, its unit tests, the close
+scenario and `desktop/README.md` carry the new words.

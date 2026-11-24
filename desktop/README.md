@@ -134,7 +134,7 @@ real `smd`, whose check is always on.
 
 Closing the window is a confirmed exit (ADR 0102 ruling 6; W-0027 A3; `src/closing.mjs`).
 
-- **It asks first only when something would stop or be lost:** FT8 running or transmit armed
+- **It asks first only when something would stop or be lost:** FT8 or FT4 running, or TX enabled
   (the daemon's own word, read at that moment), a contact being entered, a log attempt whose
   outcome is not known, Settings unsaved or still being saved. Cancel changes nothing.
 - **Then it stops FT8 itself, tells the daemon it is exiting, and waits for the answer** before

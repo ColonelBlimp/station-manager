@@ -244,9 +244,13 @@ function listOf(labels) {
  */
 export function closeQuestion({ ft8, entry, unsaved, saving }) {
     const lines = [];
-    if (ft8 === 'active') lines.push('FT8 will be stopped and transmit disarmed.');
+    // "FT8/FT4", and "TX disabled": the operator's screenshot of 2026-11-24 had "FT8 will
+    // be stopped and transmit disarmed." on FT4, beside a button that says "Disable TX".
+    // smd's answer (GET /v1/ft8/state) does not say which of the two is in use, so the
+    // line names both, as the Settings tab does, and uses the page's word for TX.
+    if (ft8 === 'active') lines.push('FT8/FT4 will be stopped and TX disabled.');
     if (ft8 === 'unknown') {
-        lines.push("FT8's state could not be read. If it is running, it will be stopped.");
+        lines.push('The state of FT8/FT4 could not be read. If it is running, it will be stopped.');
     }
     if (entry === 'draft') lines.push('The contact you are entering will be discarded.');
     if (entry === 'unknown') {

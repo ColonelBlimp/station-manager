@@ -210,7 +210,7 @@ test('no reason, no question', () => {
 test('the question: the ruled words, each line only when it is true, and two answers', () => {
     const q = closeQuestion({ ft8: 'active', ...NOTHING });
     assert.equal(q.message, 'Close Station Manager?');
-    assert.equal(q.detail, 'FT8 will be stopped and transmit disarmed.');
+    assert.equal(q.detail, 'FT8/FT4 will be stopped and TX disabled.');
     assert.deepEqual(q.buttons, ['Close', 'Cancel']);
     assert.deepEqual(q.choices, ['close', 'cancel']);
     assert.equal(q.cancelId, 1, 'dismissing the question is Cancel');
@@ -218,7 +218,7 @@ test('the question: the ruled words, each line only when it is true, and two ans
     const line = (reasons) => closeQuestion({ ft8: 'idle', ...NOTHING, ...reasons }).detail;
     assert.equal(
         closeQuestion({ ft8: 'unknown', ...NOTHING }).detail,
-        "FT8's state could not be read. If it is running, it will be stopped."
+        'The state of FT8/FT4 could not be read. If it is running, it will be stopped.'
     );
     assert.equal(line({ entry: 'draft' }), 'The contact you are entering will be discarded.');
     assert.equal(
@@ -247,7 +247,7 @@ test('the question: every reason at once, each named once, FT8 first', () => {
         saving: ['General'],
     });
     assert.deepEqual(q.detail.split('\n\n'), [
-        'FT8 will be stopped and transmit disarmed.',
+        'FT8/FT4 will be stopped and TX disabled.',
         'A contact was sent to be logged and its outcome is not known. It may already be logged.',
         'Unsaved changes in Settings (Station) will be lost.',
         'Settings (General) is still being saved. Closing does not wait: the save may not complete, and anything changed since it began will be lost.',
@@ -315,7 +315,7 @@ test('the reasons are gathered from both: the page’s lines beside smd’s word
     });
     await c.confirm();
     assert.deepEqual(c.questions[0].detail.split('\n\n'), [
-        'FT8 will be stopped and transmit disarmed.',
+        'FT8/FT4 will be stopped and TX disabled.',
         'The contact you are entering will be discarded.',
         'Unsaved changes in Settings (Station) will be lost.',
     ]);
@@ -327,7 +327,7 @@ test('a page that cannot be read does not silence smd’s word (codex-236)', asy
         answer: 'cancel',
     });
     assert.equal(await c.confirm(), false);
-    assert.equal(c.questions[0].detail, 'FT8 will be stopped and transmit disarmed.');
+    assert.equal(c.questions[0].detail, 'FT8/FT4 will be stopped and TX disabled.');
 });
 
 test('FT8’s state not known asks, with the qualified line', async () => {
@@ -335,7 +335,7 @@ test('FT8’s state not known asks, with the qualified line', async () => {
     assert.equal(await c.confirm(), true);
     assert.equal(
         c.questions[0].detail,
-        "FT8's state could not be read. If it is running, it will be stopped."
+        'The state of FT8/FT4 could not be read. If it is running, it will be stopped.'
     );
 });
 

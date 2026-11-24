@@ -359,7 +359,7 @@ export async function runClose({ adopt, useInstalledQuitRule }) {
             first.questions.length === 3 &&
                 // smd's word and the page's, in the one question.
                 first.questions[2].detail ===
-                    'FT8 will be stopped and transmit disarmed.\n\nThe contact you are entering will be discarded.' &&
+                    'FT8/FT4 will be stopped and TX disabled.\n\nThe contact you are entering will be discarded.' &&
                 JSON.stringify(watch1.sent) ===
                     JSON.stringify(['GET /v1/ft8/state', 'POST /v1/ft8/tx/arm']) &&
                 JSON.stringify(first.boxes) ===
@@ -413,7 +413,7 @@ export async function runClose({ adopt, useInstalledQuitRule }) {
             first.questions.length === 4 &&
                 // FT8's state could not be read: the qualified line, never "idle".
                 first.questions[3].detail ===
-                    "FT8's state could not be read. If it is running, it will be stopped.\n\nThe contact you are entering will be discarded." &&
+                    'The state of FT8/FT4 could not be read. If it is running, it will be stopped.\n\nThe contact you are entering will be discarded.' &&
                 JSON.stringify(watch1.sent) ===
                     JSON.stringify([
                         'GET /v1/ft8/state',
