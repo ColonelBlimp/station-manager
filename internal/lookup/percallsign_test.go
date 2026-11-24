@@ -290,3 +290,78 @@ func TestPerCallsign_TheStationRecordIsMergedFromTheCallsignsAnswer(t *testing.T
 		t.Fatalf("stored station country = %q, %v; want Christmas Island (the callsign's answer, not the held prefix)", row.Country, err)
 	}
 }
+
+// The provider's explicit "I do not recognise this" is a verdict about the
+// callsign, and what was remembered for that callsign does not outlive it (the
+// clean-room review of a09f4adc). It used to: the stale refresh treated the
+// verdict like a network failure, so the old country was served for ever and a
+// refresh was scheduled at every lookup.
+func TestPerCallsign_ARejectionAtTheStaleRefreshForgetsTheCallsignsAnswer(t *testing.T) {
+	o := parentHeld(t)
+	hamnut := &stubCountryProvider{name: "hamnut", result: christmas}
+	o.Country = hamnut
+	o.Enrich(context.Background(), "VK9XY")
+
+	o.CountryTTL = time.Nanosecond
+	o.Refresher = &syncRefresher{}
+	time.Sleep(2 * time.Millisecond)
+	hamnut.result, hamnut.err = types.Country{}, lookup.ErrPrefixNotRecognised
+
+	// The stale answer is served this once, as a stale answer always is.
+	if stale := o.Enrich(context.Background(), "VK9XY"); stale.Country.Name != "Christmas Island" {
+		t.Fatalf("stale read = %q, want Christmas Island", stale.Country.Name)
+	}
+	if _, err := o.DB.FetchCallsignCountryWithContext(context.Background(), "VK9XY"); !stderrs.Is(err, errors.ErrNotFound) {
+		t.Fatalf("the rejected answer is still remembered: %v", err)
+	}
+	// And the next lookup is the provider's verdict, not the old country.
+	if next := o.Enrich(context.Background(), "VK9XY"); next.CountrySource != lookup.SourceNotFound {
+		t.Fatalf("next lookup = %q / %q, want not_found", next.CountrySource, next.Country.Name)
+	}
+}
+
+func TestPerCallsign_ARejectionAtAForcedRefreshForgetsTheCallsignsAnswer(t *testing.T) {
+	o := parentHeld(t)
+	hamnut := &stubCountryProvider{name: "hamnut", result: christmas}
+	o.Country = hamnut
+	o.Enrich(context.Background(), "VK9XY")
+
+	hamnut.result, hamnut.err = types.Country{}, lookup.ErrPrefixNotRecognised
+	if got := o.EnrichRefresh(context.Background(), "VK9XY"); got.CountrySource != lookup.SourceNotFound {
+		t.Fatalf("forced refresh = %q, want not_found", got.CountrySource)
+	}
+	calls := hamnut.calls
+	next := o.Enrich(context.Background(), "VK9XY")
+	if next.CountrySource != lookup.SourceNotFound || hamnut.calls != calls+1 {
+		t.Fatalf("next lookup = %q / %q with %d new calls; want not_found, asked afresh",
+			next.CountrySource, next.Country.Name, hamnut.calls-calls)
+	}
+}
+
+// A failure that is NOT a verdict forgets nothing: the provider could not be
+// asked, and the remembered answer is the best there is.
+func TestPerCallsign_AFailureThatIsNotAVerdictForgetsNothing(t *testing.T) {
+	for name, failure := range map[string]error{
+		"a transport failure": stderrs.New("timeout"),
+		"a bare not-found":    errors.ErrNotFound,
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := parentHeld(t)
+			hamnut := &stubCountryProvider{name: "hamnut", result: christmas}
+			o.Country = hamnut
+			o.Enrich(context.Background(), "VK9XY")
+
+			hamnut.result, hamnut.err = types.Country{}, failure
+			o.EnrichRefresh(context.Background(), "VK9XY") // forced, and it fails
+			o.CountryTTL = time.Nanosecond
+			o.Refresher = &syncRefresher{}
+			time.Sleep(2 * time.Millisecond)
+			o.Enrich(context.Background(), "VK9XY") // stale, and its refresh fails
+
+			kept, err := o.DB.FetchCallsignCountryWithContext(context.Background(), "VK9XY")
+			if err != nil || kept.Name != "Christmas Island" {
+				t.Fatalf("the remembered answer was lost to a failure: %q, %v", kept.Name, err)
+			}
+		})
+	}
+}

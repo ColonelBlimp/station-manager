@@ -196,3 +196,26 @@ before, and may be a parent block.
 - **What an older build does with a reference database at version 4** is not established:
   migrations go up only.
 - **No sweep of the log.**
+
+## The clean-room review of the commit (`a09f4adc`), two findings
+
+1. **P2, accepted, with the reason in the code** (`heldPrefix`). The rows already in the
+   country table that are really entries for single callsigns are still there after an
+   upgrade, and with HamNut unreachable a call never looked up before that begins with one
+   is given that row's entity. Nothing stored tells such a row from a prefix, so neither a
+   migration nor the fallback can pick them out. It is confined to the fallback, which
+   already says its answer is a prefix guess, and no new row of the kind is written.
+   **Emptying or pruning a station's country table would close it and is the operator's
+   decision:** the rows are a cache of HamNut's answers and would be learnt again.
+2. **P2, fixed, tests first.** An explicit "not recognised" from HamNut for a callsign whose
+   answer was remembered left that answer in place: the stale refresh treated the verdict
+   like a network failure, so the old country was served for ever and a refresh scheduled at
+   every lookup, and a forced refresh reported `not_found` and the next ordinary lookup
+   returned the rejected country again. The verdict now forgets what was remembered for that
+   callsign, at both places (`forgetCountry`), and the next lookup asks and reports
+   `not_found`. A failure that is not a verdict (no answer, a bare 404) forgets nothing.
+   Three tests in `percallsign_test.go` and one in `callsign_country_test.go`
+   (`DeleteCallsignCountryWithContext`: exact, and forgetting twice is not an error). This
+   is the policy Codex said would need its own decision (codex-252, point 3): the choice
+   made here is that the provider's explicit verdict outlives a remembered answer, and it is
+   the operator's to reverse.

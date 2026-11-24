@@ -80,7 +80,9 @@ station's table already held two of these.
 - **A new value of `country_source`,** `country_prefix`, for the answer given when HamNut
   could not be asked. The page does not yet show it differently.
 - **HamNut's explicit "not recognised" is no longer overruled by a held prefix.** It was,
-  whenever any shorter prefix of the call happened to be held.
+  whenever any shorter prefix of the call happened to be held. The same verdict, given for a
+  callsign whose answer was remembered (at a forced refresh, or at the refresh of a stale
+  answer), forgets that answer. A failure to reach HamNut forgets nothing.
 - **Rows already in `country` that are really single-callsign entries stay there,** and can
   still mislead the fallback. They are not told apart from prefixes by anything stored.
 - **The first lookup of every callsign after the upgrade asks HamNut,** since nothing is

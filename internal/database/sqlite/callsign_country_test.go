@@ -131,3 +131,31 @@ func TestCallsignCountry_WritesNoPrefixRow(t *testing.T) {
 		t.Fatalf("the prefix table answered for KH6MB: %v", err)
 	}
 }
+
+// Forgetting is exact too, and forgetting what was never remembered is not an
+// error: the caller is acting on the provider's verdict, not on the row.
+func TestCallsignCountry_ForgetIsExactAndIdempotent(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+	for _, call := range []string{"VK9XY", "VK9XYZ"} {
+		if err := svc.UpsertCallsignCountryWithContext(ctx, call, types.Country{Name: "Christmas Island", Prefix: "VK9X"}); err != nil {
+			t.Fatalf("upsert %s: %v", call, err)
+		}
+	}
+
+	if err := svc.DeleteCallsignCountryWithContext(ctx, " vk9xy "); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := svc.FetchCallsignCountryWithContext(ctx, "VK9XY"); !stderr.Is(err, errors.ErrNotFound) {
+		t.Fatalf("VK9XY still remembered: %v", err)
+	}
+	if got, err := svc.FetchCallsignCountryWithContext(ctx, "VK9XYZ"); err != nil || got.Name != "Christmas Island" {
+		t.Fatalf("another callsign was forgotten with it: %q, %v", got.Name, err)
+	}
+	if err := svc.DeleteCallsignCountryWithContext(ctx, "VK9XY"); err != nil {
+		t.Fatalf("forgetting again: %v", err)
+	}
+	if err := svc.DeleteCallsignCountryWithContext(ctx, "  "); err == nil {
+		t.Fatal("an empty callsign was accepted")
+	}
+}

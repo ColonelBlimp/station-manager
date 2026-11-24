@@ -96,3 +96,28 @@ func (s *Service) UpsertCallsignCountryWithContext(ctx context.Context, callsign
 	}
 	return nil
 }
+
+// DeleteCallsignCountryWithContext forgets what was remembered for exactly this
+// callsign. Forgetting what was never remembered is not an error. It touches no
+// other callsign and nothing in the country table.
+func (s *Service) DeleteCallsignCountryWithContext(ctx context.Context, callsign string) error {
+	const op errors.Op = "sqlite.Service.DeleteCallsignCountryWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	key := normalizeCallsignKey(callsign)
+	if key == "" {
+		return errors.New(op).WithMsg(errMsgEmptyCallsign)
+	}
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	if _, err = h.ExecContext(ctx, `DELETE FROM callsign_country WHERE callsign = ?`, key); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("forgetting the callsign's country failed")
+	}
+	return nil
+}
