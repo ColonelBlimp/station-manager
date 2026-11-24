@@ -5,6 +5,7 @@
     import { onMount, untrack } from 'svelte';
     import { router } from '../router.svelte';
     import { ft8State, startFt8, stopFt8, reclaimFt8, armTx, abandonQso } from './ft8.svelte';
+    import { claimRefusalText } from './claimRefusal';
     import { toasts } from '../ui/toasts.svelte';
     import { ft8EnrichState } from './ft8Enrich.svelte';
     import { rig, setFtProfileLabel } from './rig.svelte';
@@ -70,6 +71,18 @@
             refusalCode === 'ft8_session_active'
     );
     const offersAbandon = $derived(refusalCode === 'ft8_session_active');
+    // What the banner says, in the operator's terms (claimRefusal.ts). "Try again" is said
+    // only while the button is there to press: not during the countdown to the page's own
+    // retry, and not where a stop is offered in its place.
+    const offersTryAgain = $derived(!offersDisarm && retryIn === null);
+    const refusalText = $derived(
+        claimRefusalText(
+            refusalCode,
+            profileLabel,
+            ft8State.claimRefusal?.message ?? '',
+            offersTryAgain
+        )
+    );
     let acting = $state(false);
     async function stopThenReclaim(action: 'disarm' | 'abandon'): Promise<void> {
         acting = true;
@@ -133,13 +146,13 @@
             data-testid="ft8-claim-banner"
         >
             <p class="font-medium">{profileLabel} is not available yet</p>
-            <p class="mt-1 text-muted">{ft8State.claimRefusal.message}</p>
+            <p class="mt-1 text-muted">{refusalText}</p>
             {#if retryIn !== null}
                 <p class="mt-1 text-muted">Retrying in {retryIn}s.</p>
             {:else if ft8State.claimRefusal.transport}
                 <p class="mt-1 text-muted">Retrying when the connection returns.</p>
             {/if}
-            {#if !offersDisarm && retryIn === null}
+            {#if offersTryAgain}
                 <!-- No countdown and nothing to stop: the operator can still ask now
                      rather than leave and re-enter the view. -->
                 <div class="mt-3">

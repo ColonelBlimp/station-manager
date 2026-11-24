@@ -30,6 +30,17 @@ const ABANDON_LABEL = 'Abandon session and disable TX';
 
 type Daemon = { busy: boolean; inFlight: boolean; session: boolean; armed: boolean };
 
+// What the banner says for each refusal: the page's own words (claimRefusal.ts), for a claim
+// of FT4 while FT8 is the profile in the way. The daemon's wording is below, in MESSAGES, and
+// is what the banner must NOT show.
+const SHOWN: Record<string, string> = {
+    ft8_profile_busy:
+        'Station Manager is still receiving FT8, and it can receive only one of FT8 and FT4 at a time.',
+    ft8_tx_in_flight: 'A transmission is in progress on FT8. FT4 can start when it has finished.',
+    ft8_session_active: 'A contact or run is in progress on FT8. End it to change to FT4.',
+    ft8_tx_armed: 'Transmit is enabled on FT8. Disable TX to change to FT4.',
+};
+
 const MESSAGES: Record<string, string> = {
     ft8_profile_busy: 'another subscriber holds a capture on the other profile',
     ft8_tx_in_flight: 'a transmission is in flight; the profile changes only between sessions',
@@ -126,7 +137,8 @@ describe('Ft8View — stop paths through a refused claim', () => {
         render(Ft8View);
 
         const banner = await screen.findByTestId('ft8-claim-banner');
-        expect(within(banner).getByText(MESSAGES.ft8_tx_armed)).toBeTruthy();
+        expect(within(banner).getByText(SHOWN.ft8_tx_armed)).toBeTruthy();
+        expect(within(banner).queryByText(MESSAGES.ft8_tx_armed)).toBeNull();
         expect(within(banner).queryByRole('button', { name: ABANDON_LABEL })).toBeNull();
         await fireEvent.click(within(banner).getByRole('button', { name: 'Disable TX' }));
 
@@ -141,7 +153,7 @@ describe('Ft8View — stop paths through a refused claim', () => {
         render(Ft8View);
 
         const banner = await screen.findByTestId('ft8-claim-banner');
-        expect(within(banner).getByText(MESSAGES.ft8_tx_in_flight)).toBeTruthy();
+        expect(within(banner).getByText(SHOWN.ft8_tx_in_flight)).toBeTruthy();
         expect(within(banner).queryByRole('button', { name: ABANDON_LABEL })).toBeNull();
         await fireEvent.click(within(banner).getByRole('button', { name: 'Disable TX' }));
 
@@ -160,7 +172,7 @@ describe('Ft8View — stop paths through a refused claim', () => {
         render(Ft8View);
 
         const banner = await screen.findByTestId('ft8-claim-banner');
-        expect(within(banner).getByText(MESSAGES.ft8_session_active)).toBeTruthy();
+        expect(within(banner).getByText(SHOWN.ft8_session_active)).toBeTruthy();
         expect(within(banner).getByRole('button', { name: 'Disable TX' })).toBeEnabled();
         await fireEvent.click(within(banner).getByRole('button', { name: ABANDON_LABEL }));
 
@@ -195,7 +207,11 @@ describe('Ft8View — stop paths through a refused claim', () => {
         await vi.waitFor(() => expect(log).toEqual(['claim:ft4', 'arm:false', 'claim:ft4']));
         const again = await screen.findByTestId('ft8-claim-banner');
         await vi.waitFor(() =>
-            expect(within(again).getByText(MESSAGES.ft8_profile_busy)).toBeTruthy()
+            expect(
+                within(again).getByText(
+                    `${SHOWN.ft8_profile_busy} If you have just switched, try again in a few seconds.`
+                )
+            ).toBeTruthy()
         );
         expect(within(again).queryByRole('button', { name: 'Disable TX' })).toBeNull();
         expect(within(again).queryByRole('button', { name: ABANDON_LABEL })).toBeNull();
@@ -326,12 +342,41 @@ describe('Ft8View — stop paths through a refused claim', () => {
         await vi.waitFor(() => expect(rig.mode).toBe('FT8'));
     });
 
+    it('ft8_profile_busy with a time to retry: the page counts down, and does not tell the operator to try again', async () => {
+        // The daemon's linger gives the page a time to retry, so there is no button, and
+        // an instruction with nothing to press would be an instruction nobody can follow.
+        setFt8Claimer((mode): Promise<ClaimResult> => {
+            log.push(`claim:${mode}`);
+            return Promise.resolve({
+                kind: 'refused',
+                code: 'ft8_profile_busy',
+                message: MESSAGES.ft8_profile_busy,
+                retryAfterMs: 60_000,
+            });
+        });
+        render(Ft8View);
+
+        const banner = await screen.findByTestId('ft8-claim-banner');
+        expect(within(banner).getByText(SHOWN.ft8_profile_busy)).toBeTruthy();
+        expect(within(banner).getByText(/^Retrying in \d+s\.$/)).toBeTruthy();
+        expect(banner.textContent).not.toMatch(/try again/i);
+        expect(within(banner).queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(banner.textContent).not.toContain('subscriber');
+    });
+
     it('ft8_profile_busy: no stop path — another subscriber holds the capture; Try again re-claims', async () => {
         const d: Daemon = { busy: true, inFlight: false, session: false, armed: false };
         wireDaemon(d, log);
         render(Ft8View);
 
         const banner = await screen.findByTestId('ft8-claim-banner');
+        // In the operator's words, and with "try again" said only because the button is there.
+        expect(
+            within(banner).getByText(
+                `${SHOWN.ft8_profile_busy} If you have just switched, try again in a few seconds.`
+            )
+        ).toBeTruthy();
+        expect(banner.textContent).not.toContain('subscriber');
         expect(within(banner).queryByRole('button', { name: 'Disable TX' })).toBeNull();
         expect(within(banner).queryByRole('button', { name: ABANDON_LABEL })).toBeNull();
         expect(opened).toEqual([]);

@@ -214,7 +214,11 @@ release uses gonum.
 > again rather than its URL repeated: a grant reopens the stream, a refusal shows the
 > banner. A claim that cannot reach the daemon is retried when the window comes back
 > online or the tab is shown (the stream's own revival signals), and a banner with no
-> countdown and nothing to stop offers **Try again**. The rig chip, the live Mode
+> countdown and nothing to stop offers **Try again**. The banner speaks in the operator's
+> terms, not the daemon's (`claimRefusal.ts`; operator, 2026-11-24): for each reason it
+> knows by its code it names the mode wanted and the mode still in the way ("Station
+> Manager is still receiving FT8, and it can receive only one of FT8 and FT4 at a
+> time."), and it says "try again" only while that button is there. The rig chip, the live Mode
 > select's label (`DATA-U · FT4`; the option's value stays the literal `set_mode`
 > sends) and the log form's ADIF resolution name the rig's data literal by the **last
 > profile whose stream opened** (`setFtProfileLabel`): a grant alone does not count,

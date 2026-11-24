@@ -104,4 +104,3 @@ and supports a hashed OTHER recipient. Two things remained.
   never returning the roger half (the Service test fails).
 - **Gates:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the maintainability metrics (0
   regressions), `go test -race ./internal/ft8` in full.
-
