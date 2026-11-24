@@ -370,7 +370,7 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// for it. Only a forced refresh reaches here with something remembered (an
 	// ordinary lookup asks the provider only when nothing is).
 	if c.rejected && o.DB != nil {
-		o.forgetCountry(ctx, callsign, "provider verdict")
+		o.forgetCountry(ctx, callsign, c.askedAt, "provider verdict")
 	}
 	if s.coldMiss && !IsEmpty(s.data) && o.DB != nil {
 		// Replace, not merge: a provider refresh (force-refresh, or the cold
@@ -418,6 +418,14 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	if logDB := o.logCheckDB(); logDB != nil {
 		if code, ok := dxcc.DXCCForPrefix(c.data.DXCCPrefix); ok {
 			exists, hErr := logDB.HasQsoForDxccWithContext(ctx, code)
+			// A contact stored with this country and NO number is this entity
+			// worked before its number was known (the catalogue once held only
+			// the entities already worked). It cannot be found by number, so it
+			// is asked for by name, and only among contacts that carry no
+			// number: where one was stored, the number rules.
+			if hErr == nil && !exists {
+				exists, hErr = logDB.HasQsoForCountryLackingDxccWithContext(ctx, c.data.Name)
+			}
 			if hErr != nil {
 				o.warn("new-entity check (dxcc) failed", hErr)
 			} else {
@@ -505,6 +513,9 @@ type countryReadResult struct {
 	coldMiss bool // we just blocked on hamnut and got data
 	staleHit bool // cached but past TTL
 	rejected bool // hamnut explicitly does not recognise the callsign
+	// askedAt is when the provider was asked, for a rejection: what was
+	// remembered for the callsign since then is newer than this verdict.
+	askedAt time.Time
 }
 
 // stationReadResult is the symmetric result type for the station layer.
@@ -562,13 +573,14 @@ func (o *Orchestrator) readCountry(ctx context.Context, callsign string, force b
 	if o.Country == nil {
 		return o.heldPrefix(ctx, callsign, force)
 	}
+	askedAt := time.Now().UTC()
 	res, lerr := o.Country.LookupWithContext(ctx, callsign)
 	if lerr != nil {
 		// Only the provider's explicit verdict is reported as not_found, and a
 		// held prefix does not overrule it. A bare ErrNotFound (a 404), a
 		// transport failure or a cancellation could not ask.
 		if stderrs.Is(lerr, ErrPrefixNotRecognised) {
-			return countryReadResult{source: SourceNotFound, rejected: true}
+			return countryReadResult{source: SourceNotFound, rejected: true, askedAt: askedAt}
 		}
 		return o.heldPrefix(ctx, callsign, force)
 	}
@@ -630,10 +642,14 @@ func (o *Orchestrator) rememberCountry(ctx context.Context, callsign string, c t
 
 // forgetCountry drops what was remembered for a callsign, on the provider's
 // explicit verdict that it does not recognise it. Never on a failure to ask.
+// The verdict covers what was remembered when the provider was asked
+// (askedAt): an answer remembered since is newer, and survives. Two lookups of
+// one callsign can be out at once, and the rejection can be the one that lands
+// last (the clean-room review of 557cd26a).
 // The prefix table is left alone: a prefix row answers for other calls too, and
 // one callsign's verdict says nothing about them.
-func (o *Orchestrator) forgetCountry(ctx context.Context, callsign, what string) {
-	if werr := o.DB.DeleteCallsignCountryWithContext(ctx, strings.ToUpper(strings.TrimSpace(callsign))); werr != nil {
+func (o *Orchestrator) forgetCountry(ctx context.Context, callsign string, askedAt time.Time, what string) {
+	if werr := o.DB.DeleteCallsignCountryWithContext(ctx, strings.ToUpper(strings.TrimSpace(callsign)), askedAt); werr != nil {
 		o.warn(what+": forgetting the callsign's country failed", werr)
 	}
 }
@@ -752,6 +768,7 @@ func (o *Orchestrator) scheduleCountryRefresh(callsign string) {
 		return
 	}
 	o.Refresher.Schedule(func(ctx context.Context) {
+		askedAt := time.Now().UTC()
 		res, err := o.Country.LookupWithContext(ctx, callsign)
 		if err != nil {
 			// An explicit "not recognised" is a verdict on the callsign, and
@@ -760,7 +777,7 @@ func (o *Orchestrator) scheduleCountryRefresh(callsign string) {
 			// clean-room review of a09f4adc). The next lookup then asks and
 			// reports not_found.
 			if stderrs.Is(err, ErrPrefixNotRecognised) {
-				o.forgetCountry(ctx, callsign, "async refresh")
+				o.forgetCountry(ctx, callsign, askedAt, "async refresh")
 			}
 			// Anything else is fail-quiet: the provider could not be asked,
 			// the stale answer stays and the next lookup tries again (ADR

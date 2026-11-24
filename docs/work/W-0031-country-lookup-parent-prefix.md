@@ -262,3 +262,34 @@ against the old catalogue for those reasons.
 The operator's override file (`dxcc-entities.json` in the data directory) still wins over
 the embedded entries. The catalogue is as current as the `cty.csv` it was generated from;
 a new entity needs a regeneration.
+
+## Two more clean-room findings, both fixed, tests first (2026-11-24; not committed)
+
+1. **Of `557cd26a` (P2): an older rejection could delete a newer answer.** A forced refresh
+   that got "not recognised" waits for its station lookup before it acts; meanwhile another
+   refresh of the same callsign can succeed and be remembered; the rejection then deleted
+   that newer answer, because it forgot by callsign alone. The forget now carries the moment
+   HamNut was asked and removes only what was remembered at or before it
+   (`DeleteCallsignCountryWithContext`, `forgetCountry`). Shown in the database and at both
+   places in the pipeline, with a provider that remembers another answer before it rejects.
+   With the delete unconditional again, all three tests fail.
+2. **Of `1952d50a` (P2): a newly numbered entity could look new though it had been
+   worked.** Before the catalogue was completed, a prefix with no number sent the new-entity
+   check to the country name, which found a contact stored with that country. With the
+   number known, the check goes by number, and a contact stored earlier with its country
+   and NO number (the very contacts the old catalogue left without one) is not found by it.
+   The check now also asks for a contact with that country that carries no number
+   (`HasQsoForCountryLackingDxccWithContext`). Where a number was stored, the number still
+   rules: a contact with the same country name and another entity's number does not count.
+   Three pipeline tests and one database test.
+
+**The contacts stored without a DXCC number, filled in on the operator's direction**
+("Let's fill in the missing DXCC numbers", 2026-11-24). There were 31, with 26 callsigns.
+HamNut was asked about each callsign through the daemon's refresh lookup and its primary
+prefix turned into a number by the new catalogue. Where HamNut's country was the country
+already stored, the number alone was added: 29 contacts. The other two had no country at
+all (`NON-DXCC` and `Unknown`) and were given country, number, zones and continent from
+HamNut's answers, on a second direction ("Yes, correct both from HamNut's answers"). Each
+went through `PATCH /v1/qso/{uuid}` and answered 200 with the values sent; the log file,
+read afterwards, holds no contact without a number. So at this station the fallback of
+point 2 has nothing left to find; it stays for any log that still has such contacts.

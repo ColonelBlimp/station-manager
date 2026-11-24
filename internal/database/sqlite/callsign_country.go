@@ -98,9 +98,12 @@ func (s *Service) UpsertCallsignCountryWithContext(ctx context.Context, callsign
 }
 
 // DeleteCallsignCountryWithContext forgets what was remembered for exactly this
-// callsign. Forgetting what was never remembered is not an error. It touches no
-// other callsign and nothing in the country table.
-func (s *Service) DeleteCallsignCountryWithContext(ctx context.Context, callsign string) error {
+// callsign, on a provider verdict that was asked for at `asked`. Only an answer
+// remembered at or before that instant goes: one remembered since is newer than
+// the verdict, and an older rejection arriving late must not delete it.
+// Forgetting what was never remembered is not an error. It touches no other
+// callsign and nothing in the country table.
+func (s *Service) DeleteCallsignCountryWithContext(ctx context.Context, callsign string, asked time.Time) error {
 	const op errors.Op = "sqlite.Service.DeleteCallsignCountryWithContext"
 	if err := checkService(op, s); err != nil {
 		return err
@@ -116,7 +119,10 @@ func (s *Service) DeleteCallsignCountryWithContext(ctx context.Context, callsign
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	if _, err = h.ExecContext(ctx, `DELETE FROM callsign_country WHERE callsign = ?`, key); err != nil {
+	// Both instants are UTC and written by the same driver, so they compare as
+	// they were written (UpsertCallsignCountryWithContext stamps time.Now().UTC()).
+	if _, err = h.ExecContext(ctx,
+		`DELETE FROM callsign_country WHERE callsign = ? AND last_refreshed_at <= ?`, key, asked.UTC()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("forgetting the callsign's country failed")
 	}
 	return nil

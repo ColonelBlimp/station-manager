@@ -388,6 +388,46 @@ func (s *Service) HasQsoForCountryWithContext(ctx context.Context, country strin
 	return exists, nil
 }
 
+// HasQsoForCountryLackingDxccWithContext returns true when at least one
+// non-deleted QSO row has `country = ?` and NO stored ADIF DXCC entity code.
+//
+// It answers one question for the new-entity check: was this entity worked by a
+// contact whose number was never known? The entity catalogue once held only the
+// entities already worked, so a first contact with any other was stored with
+// its country and no number. The check goes by number wherever the prefix has
+// one (HasQsoForDxccWithContext), and such a contact carries none to be found
+// by: without this it would read as a new entity though it has been worked (the
+// clean-room review of 1952d50a). A contact that DOES carry a number is not
+// matched here, whatever its country says: where a number was stored, the
+// number rules. An empty country returns (false, nil) without a query.
+func (s *Service) HasQsoForCountryLackingDxccWithContext(ctx context.Context, country string) (bool, error) {
+	const op errors.Op = "sqlite.Service.HasQsoForCountryLackingDxccWithContext"
+	if err := checkService(op, s); err != nil {
+		return false, err
+	}
+	country = strings.TrimSpace(country)
+	if country == "" {
+		return false, nil
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return false, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	exists, err := models.Qsos(
+		models.QsoWhere.Country.EQ(country),
+		qm.Where("COALESCE(json_extract(additional_data, '$.dxcc'), '') = ''"),
+	).Exists(ctx, h)
+	if err != nil {
+		return false, errors.New(op).WithErr(err).WithMsg("checking QSO existence by country without a DXCC code")
+	}
+	return exists, nil
+}
+
 // HasQsoForDxccWithContext returns true when at least one non-deleted QSO row
 // exists whose stored ADIF DXCC entity code equals `dxcc`. Like
 // HasQsoForCountryWithContext it backs the enrichment "new entity" check, but

@@ -143,7 +143,7 @@ func TestCallsignCountry_ForgetIsExactAndIdempotent(t *testing.T) {
 		}
 	}
 
-	if err := svc.DeleteCallsignCountryWithContext(ctx, " vk9xy "); err != nil {
+	if err := svc.DeleteCallsignCountryWithContext(ctx, " vk9xy ", time.Now().UTC()); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if _, err := svc.FetchCallsignCountryWithContext(ctx, "VK9XY"); !stderr.Is(err, errors.ErrNotFound) {
@@ -152,10 +152,42 @@ func TestCallsignCountry_ForgetIsExactAndIdempotent(t *testing.T) {
 	if got, err := svc.FetchCallsignCountryWithContext(ctx, "VK9XYZ"); err != nil || got.Name != "Christmas Island" {
 		t.Fatalf("another callsign was forgotten with it: %q, %v", got.Name, err)
 	}
-	if err := svc.DeleteCallsignCountryWithContext(ctx, "VK9XY"); err != nil {
+	if err := svc.DeleteCallsignCountryWithContext(ctx, "VK9XY", time.Now().UTC()); err != nil {
 		t.Fatalf("forgetting again: %v", err)
 	}
-	if err := svc.DeleteCallsignCountryWithContext(ctx, "  "); err == nil {
+	if err := svc.DeleteCallsignCountryWithContext(ctx, "  ", time.Now().UTC()); err == nil {
 		t.Fatal("an empty callsign was accepted")
+	}
+}
+
+// A verdict forgets only what it was a verdict ON: an answer remembered AFTER
+// the provider was asked is a newer one, and an older rejection arriving late
+// must not delete it (the clean-room review of 557cd26a: a forced refresh that
+// got "not recognised" waits for its station lookup, and meanwhile another
+// refresh of the same callsign can succeed and be remembered).
+func TestCallsignCountry_ForgetSparesAnAnswerNewerThanTheVerdict(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+
+	asked := time.Now().UTC() // the provider is asked, and will say "not recognised"
+	time.Sleep(5 * time.Millisecond)
+	if err := svc.UpsertCallsignCountryWithContext(ctx, "VK9XY", types.Country{Name: "Christmas Island", Prefix: "VK9X"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	if err := svc.DeleteCallsignCountryWithContext(ctx, "VK9XY", asked); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if got, err := svc.FetchCallsignCountryWithContext(ctx, "VK9XY"); err != nil || got.Name != "Christmas Island" {
+		t.Fatalf("a newer answer was deleted by an older verdict: %q, %v", got.Name, err)
+	}
+
+	// A verdict from after it was remembered does forget it.
+	time.Sleep(5 * time.Millisecond)
+	if err := svc.DeleteCallsignCountryWithContext(ctx, "VK9XY", time.Now().UTC()); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := svc.FetchCallsignCountryWithContext(ctx, "VK9XY"); !stderr.Is(err, errors.ErrNotFound) {
+		t.Fatalf("the answer outlived a verdict given after it: %v", err)
 	}
 }
