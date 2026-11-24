@@ -9,10 +9,10 @@ const DAEMON = 'another subscriber holds a capture on the other profile';
 describe('claimRefusalText', () => {
     it('says what is in the way, in the operator\u2019s terms, naming both modes', () => {
         expect(claimRefusalText('ft8_profile_busy', 'FT4', DAEMON, false)).toBe(
-            'Station Manager is still receiving FT8, and it can receive only one of FT8 and FT4 at a time.'
+            'FT8 is still open, and only one of FT8 and FT4 can be open at a time.'
         );
         expect(claimRefusalText('ft8_tx_in_flight', 'FT4', 'x', false)).toBe(
-            'A transmission is in progress on FT8. FT4 can start when it has finished.'
+            'FT8 is transmitting, or about to. Disable TX to change to FT4.'
         );
         expect(claimRefusalText('ft8_session_active', 'FT4', 'x', false)).toBe(
             'A contact or run is in progress on FT8. End it to change to FT4.'
@@ -27,7 +27,7 @@ describe('claimRefusalText', () => {
 
     it('swaps the two modes when FT8 is the one wanted', () => {
         expect(claimRefusalText('ft8_profile_busy', 'FT8', DAEMON, false)).toBe(
-            'Station Manager is still receiving FT4, and it can receive only one of FT8 and FT4 at a time.'
+            'FT4 is still open, and only one of FT8 and FT4 can be open at a time.'
         );
         expect(claimRefusalText('ft8_tx_armed', 'FT8', 'x', false)).toBe(
             'Transmit is enabled on FT4. Disable TX to change to FT8.'
@@ -54,6 +54,16 @@ describe('claimRefusalText', () => {
         ]) {
             expect(claimRefusalText(code, 'FT4', DAEMON, true)).not.toContain('subscriber');
         }
+    });
+
+    it('claims no more than the refusal means', () => {
+        // A stream of the other mode is open; whether anything is being received is not
+        // known from the refusal. And waiting for a transmission to end does not unblock
+        // the change: TX is still enabled afterwards.
+        expect(claimRefusalText('ft8_profile_busy', 'FT4', DAEMON, true)).not.toMatch(/receiv/i);
+        const inFlight = claimRefusalText('ft8_tx_in_flight', 'FT4', 'x', false);
+        expect(inFlight).not.toMatch(/when it has finished/);
+        expect(inFlight).toMatch(/Disable TX/);
     });
 
     it('keeps what it was given for a reason it does not know', () => {

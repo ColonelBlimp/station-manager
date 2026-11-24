@@ -34,9 +34,8 @@ type Daemon = { busy: boolean; inFlight: boolean; session: boolean; armed: boole
 // of FT4 while FT8 is the profile in the way. The daemon's wording is below, in MESSAGES, and
 // is what the banner must NOT show.
 const SHOWN: Record<string, string> = {
-    ft8_profile_busy:
-        'Station Manager is still receiving FT8, and it can receive only one of FT8 and FT4 at a time.',
-    ft8_tx_in_flight: 'A transmission is in progress on FT8. FT4 can start when it has finished.',
+    ft8_profile_busy: 'FT8 is still open, and only one of FT8 and FT4 can be open at a time.',
+    ft8_tx_in_flight: 'FT8 is transmitting, or about to. Disable TX to change to FT4.',
     ft8_session_active: 'A contact or run is in progress on FT8. End it to change to FT4.',
     ft8_tx_armed: 'Transmit is enabled on FT8. Disable TX to change to FT4.',
 };

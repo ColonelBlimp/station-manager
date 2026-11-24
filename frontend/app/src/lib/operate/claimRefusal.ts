@@ -21,13 +21,20 @@ export function claimRefusalText(
     const other = wanted === 'FT4' ? 'FT8' : 'FT4';
     switch (code) {
         case 'ft8_profile_busy': {
-            const still = `Station Manager is still receiving ${other}, and it can receive only one of FT8 and FT4 at a time.`;
+            // "Open", not "receiving": the refusal means a stream of the other mode is
+            // still open, and a stream can be open while capture never started (the
+            // clean-room review of b8ad8dba).
+            const still = `${other} is still open, and only one of FT8 and FT4 can be open at a time.`;
             return canTryAgain
                 ? `${still} If you have just switched, try again in a few seconds.`
                 : still;
         }
         case 'ft8_tx_in_flight':
-            return `A transmission is in progress on ${other}. ${wanted} can start when it has finished.`;
+            // Not "it can start when the transmission has finished": a manual send is in
+            // flight while it still waits for its slot, and when it ends TX is still
+            // enabled, which refuses the change in its turn. Disable TX is what unblocks
+            // it, and the banner offers that button (the same review).
+            return `${other} is transmitting, or about to. Disable TX to change to ${wanted}.`;
         case 'ft8_session_active':
             return `A contact or run is in progress on ${other}. End it to change to ${wanted}.`;
         case 'ft8_tx_armed':
