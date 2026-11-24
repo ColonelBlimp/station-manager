@@ -423,11 +423,25 @@ type combinedMessage struct {
 //
 //   - An unresolved sender ("<...>") is nobody. No heuristic stands in for it:
 //     not "the station we are working", not "the only DX on the band".
+//
 //   - A recipient may be a hashed token, "<...>" or a call in angle brackets: the
 //     other half is often for a station whose call this decoder never resolved,
 //     and that must not cost us our own half. A hashed recipient is never us: its
-//     token is kept as printed, and no plain call equals it. (A station whose own
-//     call is compound works the type-4 ladder, which does not read this line.)
+//     token is kept as printed, and no plain call equals it.
+//
+//     A KNOWN LIMIT, kept on purpose (the clean-room review of 9acd5ce2 raised
+//     it). The decoder prints a recipient in angle brackets only when the message
+//     carries that call as a hash, which a sender does for a call that does not
+//     fit the 28-bit field: a compound call, or one with a suffix (go-ft8,
+//     unpack28WithHashes). A plain call such as this station's is carried in
+//     full, so it is never hashed by a conforming sender. An operator whose own
+//     call is compound or portable would be addressed as "<CALL> RR73; ..." and
+//     that half is NOT read here. Reading it means deciding that the decoder's
+//     resolution of a recipient hash is enough to say "that is us", and which
+//     ladder such a station is on (the type-4 ladder has its own parser and does
+//     not read this line at all). That is a decision for the operator, not a
+//     default: W-0030 records it as not covered.
+//
 //   - The same plain call as both recipients is ambiguous and is taken as
 //     neither. That is this parser's rule; the decoder does not forbid it.
 func parseCombined(text string) (combinedMessage, bool) {

@@ -2,8 +2,12 @@
 
 **Status:** Selected and built 2026-11-24 (operator: "go with recommendations, fix it now").
 Reviewed by Codex in three rounds (codex-242, codex-243, codex-245), with no runtime finding
-open; committed and pushed the same day on the operator's direction. It is not at the station
-until it is deployed there. Closing the dossier is the operator's decision.
+open; committed and pushed the same day on the operator's direction, and **at the station
+since 2026-11-24** (the operator's deploy: both packages at `2.0.0~alpha.5.315.gb8ad8dba`, the
+daemon active, no error in its log since the start; checked locally and read-only). It has not
+yet met a combined message on the air. **It acts on FT8 only:** on FT4 the decoder never
+resolves a hashed sender, and that is to be closed in the decoder library (the operator's ruling,
+below). Closing the dossier is the operator's decision.
 **Outcome:** a contact that a station working several callers at once has rogered is logged
 here, as it is in that station's log.
 
@@ -104,3 +108,90 @@ and supports a hashed OTHER recipient. Two things remained.
   never returning the roger half (the Service test fails).
 - **Gates:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the maintainability metrics (0
   regressions), `go test -race ./internal/ft8` in full.
+
+### Clean-room reviews of the three commits (2026-11-24; fixes not committed)
+
+`94e176d6` (the close-flow fixes): no findings. `9acd5ce2` (this fix): two. `b8ad8dba` (the
+banner): two, recorded with the banner's note in the dogfood inbox.
+
+1. **P2, kept as a known limit, with the reason in the code:** a combined message that
+   addresses us by a HASHED call (`<OURCALL> RR73; …`) is not read as ours. The decoder prints
+   a recipient in angle brackets only when the sender hashed it, which a sender does for a
+   call that does not fit the message's 28-bit field: a compound call or one with a suffix. A
+   plain call such as this station's is carried in full. So this does not touch the reported
+   fault or this station as it operates today; it would touch an operator signing portable or
+   with a compound call. Reading that half means accepting the decoder's resolution of a
+   recipient hash as "that is us", and settling which ladder such a station is on (the type-4
+   ladder does not read this line at all). **Not covered by W-0030, and the operator's to
+   decide.**
+2. **P3, fixed (test only):** the logged-frame test looked at an empty channel to show that
+   the last contact was published once, which shows nothing about a frame still on its way. A
+   third contact is now the sentinel: the frame after the second contact's must be the
+   third's, and nothing is claimed about the third.
+
+### At the station: the fix does not act on FT4 (found 2026-11-24, an hour after the deploy; not fixed)
+
+The operator, on FT4 on 17 m after the deploy, showed the Band Activity panel saying only
+"1 unidentifiable decode hidden (hide hashed calls)" ("Erk!"). Read from the station's decode
+log for those minutes (read-only):
+
+- **What was hidden.** A combined message from a station he was calling, with its sender
+  unresolved: `<call> RR73; <call> <...> <report>`. Two arrived in three minutes, from a
+  station whose plain messages (`<call> <DX> RR73`) were being decoded in the slots around
+  them. So the decoder had heard that station's call and still printed `<...>`.
+- **Why.** The decoder library's FT4 side keeps no table of heard calls. Its own source says
+  so ("The initial FT4 decoder is stateless", `go-ft8` v0.9.0, `ft4/decode.go`), and so does
+  this repository's (`internal/ft8/decode.go`, `slotDecoder`: "the v0.9.0 FT4 core carries no
+  such state yet"). On FT8 the table is what turned `<...>` into `<VK9XY>` this morning. On
+  FT4 a hashed call is never resolved.
+- **What follows.** Criterion 3 reads a combined message only when its sender is resolved. On
+  FT4 it never is. **So on FT4 this fix changes nothing:** a roger that comes only in the
+  combined form is still not read, and the contact is logged only if the station also sends a
+  plain roger before the repeat limit ends the session. The fault the operator reported was on
+  FT8, and the fix holds there.
+- **Claude's miss.** Before the deploy the operator said he would try the fix on FT4. Claude
+  looked at what the DX station had sent on FT4 that morning and did not look at whether the
+  decoder resolves a hashed sender on FT4 at all, though this repository's own comment says it
+  does not. The limit should have been in the criteria.
+- **Two ways to close it, neither chosen.**
+  1. **Here:** when the sender is `<...>`, compare the message's own 10-bit sender hash with
+     the hash of the station being worked. The decoded message carries its 77 payload bits
+     (`DecodedMessage.Payload`), so the hash is there to read; the function that hashes a
+     callsign is not exported by the library and would have to be written here, or exported
+     there. It would act on FT4 and on FT8 alike. It is the same evidence the decoder uses to
+     resolve a hash, applied to the one call that matters; it changes criterion 3, so it is
+     the operator's ruling.
+  2. **In the decoder library:** give its FT4 side the table of heard calls. That is a
+     release of the library and a dependency upgrade here, which is a change of its own.
+- **Meanwhile, for the operator:** such lines are shown, not hidden, with "hide hashed calls"
+  off (Settings, FT8, Band Activity display); and a higher repeat cap gives a plain roger more
+  time to arrive.
+
+### A recommendation for the decoder library (2026-11-24; written at the operator's request, for him to pass on)
+
+The operator: "Give a recommendation for the go-ft8 library and I'll pass it on to them for
+consideration...". It is a page of its own, with the same text ready to copy as Markdown:
+<https://claude.ai/artifact/HiadEqvoq9WcScuGj6vU4E> (private to the operator until he shares
+it). It names no station and uses placeholder callsigns. Against `go-ft8` v0.9.0 it recommends,
+in this order:
+
+1. **The FT4 decoder keeps the callsign hash history,** with the FT8 decoder's semantics (one
+   table per decoder instance, empty when new). This is the fix: the FT4 side renders every
+   payload through `ft8.ParsePayload77`, which has no history.
+2. **The caller can seed the history** with calls it already knows (its own, the station being
+   worked), since the table is empty at the start of a session and after a band change.
+3. **The hash function and the fields of the combined message are exported,** so a caller can
+   check an unresolved sender against the one call it cares about, with no history at all.
+4. **The documentation says what each decoder remembers.**
+
+What this means here: with item 1 or item 3 in a released library, criterion 3 could be met on
+FT4 after a dependency upgrade, which is a change of its own. Nothing in this repository is
+changed by the recommendation, and whether to close the gap here first (the first of the two
+ways above) is still the operator's to decide.
+
+**Ruled (operator, 2026-11-24): "Let's wait for the ft8 lib as they are working on it...".** The
+gap on FT4 is closed in the decoder library, not here: nothing is built in this repository for
+it, and the hash check of the first way is not written. Until a library release with FT4 hash
+history is taken here (a dependency upgrade, a change of its own), a combined message on FT4
+is not read, and a contact on FT4 is logged only when the station also sends a plain roger in
+time. When that upgrade is made, criterion 3 is to be shown on FT4 by a test of its own.

@@ -97,9 +97,13 @@ func nextLogged(t *testing.T, frames <-chan map[string]any, what string) map[str
 	}
 }
 
-// One contact, one row, one frame, and the frame names that row. Then a second
-// contact: its frame is the very next one, so the first contact produced exactly
-// one (a second frame for it would have arrived before the second contact's).
+// One contact, one row, one frame, and the frame names that row. That each
+// contact is published exactly once is shown without waiting to see nothing: the
+// frame after a contact's must be the NEXT contact's, since a second frame for
+// the earlier one would have been published, and so delivered, before it. The
+// last contact is only that sentinel: nothing is claimed about how often it is
+// published (the clean-room review of 9acd5ce2: a look at an empty channel
+// proves nothing about a frame still on its way).
 func TestFt8QsoLog_EachStoredContactPublishesOneLoggedFrameNamingItsRow(t *testing.T) {
 	eachFtMode(t, func(t *testing.T, m ftMode) {
 		d, _ := newFt8LogDaemon(t)
@@ -133,10 +137,10 @@ func TestFt8QsoLog_EachStoredContactPublishesOneLoggedFrameNamingItsRow(t *testi
 		if second["uuid"] == first["uuid"] {
 			t.Fatal("two contacts were published under one row")
 		}
-		select {
-		case extra := <-frames:
-			t.Fatalf("a third frame arrived for two contacts: %v", extra)
-		default:
+
+		m.complete(t, d, 3, "K1ABC") // the sentinel
+		if third := nextLogged(t, frames, "K1ABC"); third["callsign"] != "K1ABC" {
+			t.Fatalf("the next frame = %v; want K1ABC's: DL9UW was published more than once", third)
 		}
 	})
 }
