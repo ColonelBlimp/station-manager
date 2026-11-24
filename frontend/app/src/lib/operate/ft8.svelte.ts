@@ -1391,6 +1391,28 @@ let claimAwaitingOpen = false;
 // The profile the view last asked for — what a terminal stream error re-claims.
 let activeMode: FtProfileName = 'ft8';
 
+// A plain change between FT8 and FT4 must not show a warning (operator, 2026-11-24: "If
+// the User is simply switching between FT4 and FT8 or visa versa - then this warning
+// should not be there. Only if either mode has been 'TX Enabled' should this then be
+// seen", and "If time is needed, this time is available while the slots are first
+// decoded"). On a change the view closes its own stream and claims the other mode at
+// once. The daemon refuses a claim while a stream of the other mode is still counted
+// (ClaimProfile, internal/ft8/profile_claim.go), and from the desktop app it hears the
+// claim before the close: in smd.log of 2026-11-24 the close is logged 1 to 2 ms after
+// each of three refused claims, where the 12 changes timed from a browser tab had it 2
+// to 5 ms before the claim. That refusal names no time to retry, because the capture's
+// linger has not begun.
+//
+// So a busy refusal with no time to retry is claimed again without a banner: up to
+// QUIET_RECLAIMS more claims, QUIET_RECLAIM_STEP_MS apart (about three seconds, well
+// inside the 7.5 s of an FT4 slot in which the view has nothing to show anyway). A mode
+// still busy after that is held by another client, and the banner says so. Any other
+// reason (TX enabled, a contact, a transmission) is shown at once, quiet claim or not.
+// The two numbers are chosen, not measured limits: the operator's to change.
+export const QUIET_RECLAIM_STEP_MS = 250;
+export const QUIET_RECLAIMS = 12;
+let quietReclaimsLeft = 0;
+
 export function setFt8Claimer(fn: Claimer | null): void {
     claimer = fn;
 }
@@ -1437,6 +1459,14 @@ function disarmRecovery(): void {
  *  one (tests, older wiring) the stream opens directly on the FT8 profile. */
 export async function startFt8(mode: FtProfileName = 'ft8'): Promise<void> {
     if (closeFn !== null || opener === null) return;
+    quietReclaimsLeft = QUIET_RECLAIMS; // a fresh start; a quiet re-claim does not renew it
+    return claimThenOpen(mode);
+}
+
+/** One claim, and the stream on its grant. startFt8 is the entry; the quiet re-claim
+ *  comes back here so that it spends the allowance instead of renewing it. */
+async function claimThenOpen(mode: FtProfileName): Promise<void> {
+    if (closeFn !== null || opener === null) return;
     activeMode = mode;
     const gen = ++startGen;
     if (claimer === null) {
@@ -1460,8 +1490,10 @@ export async function startFt8(mode: FtProfileName = 'ft8'): Promise<void> {
 
 /** A claim that did not grant `mode`: record the refusal for the banner and
  *  arrange the retry it deserves — the daemon's hint on a timer, the recovery
- *  signals for a transport failure, nothing for a contradiction or a hint-less
- *  refusal (the operator acts: a stop path, Try again, or leaving the view). */
+ *  signals for a transport failure, the quiet re-claims for a busy refusal that
+ *  names no time (no banner while they last), and nothing for a contradiction or
+ *  any other hint-less refusal (the operator acts: a stop path, Try again, or
+ *  leaving the view). */
 function noteClaimFailure(result: ClaimResult, mode: FtProfileName, gen: number): void {
     if (result.kind === 'ok') {
         // A 200 naming another profile is a contradiction, not a grant: opening
@@ -1480,6 +1512,19 @@ function noteClaimFailure(result: ClaimResult, mode: FtProfileName, gen: number)
     if (result.kind === 'refused' || result.kind === 'validation' || result.kind === 'server')
         code = result.code;
     const retryMs = result.kind === 'refused' ? result.retryAfterMs : 0;
+    if (code === 'ft8_profile_busy' && retryMs <= 0 && quietReclaimsLeft > 0) {
+        // No banner: see QUIET_RECLAIMS. The same generation guard as the hinted
+        // re-claim below, so a stop or another start ends it.
+        quietReclaimsLeft--;
+        clearReclaim();
+        reclaimTimer = setTimeout(() => {
+            reclaimTimer = null;
+            if (gen !== startGen) return;
+            startGen--; // let the retry take the same generation slot
+            void claimThenOpen(mode);
+        }, QUIET_RECLAIM_STEP_MS);
+        return;
+    }
     const transport = result.kind === 'network' || result.kind === 'server';
     ft8State.claimRefusal = {
         code,
@@ -1549,6 +1594,7 @@ export function resetFt8ForTests(): void {
     clearReclaim();
     claimAwaitingOpen = false;
     activeMode = 'ft8';
+    quietReclaimsLeft = 0;
     ft8State.claimRefusal = null;
     ft8State.claimed = false;
     ft8State.connected = false;

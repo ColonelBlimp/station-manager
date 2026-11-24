@@ -12,6 +12,8 @@ import {
     setFt8Transport,
     setFt8Claimer,
     reclaimFt8,
+    QUIET_RECLAIMS,
+    QUIET_RECLAIM_STEP_MS,
     setFt8TxActions,
     setFt8AdmissionGate,
     armTx,
@@ -719,22 +721,159 @@ describe('profile claim before subscribe (ADR 0080)', () => {
         expect(ft8State.claimRefusal).toBeNull();
     });
 
-    it('a refusal without a hint schedules nothing (the operator acts)', async () => {
-        setFt8Transport(() => () => undefined);
-        let claims = 0;
-        setFt8Claimer(() => {
-            claims++;
-            return Promise.resolve({
-                kind: 'refused',
-                code: 'ft8_profile_busy',
-                message: 'busy',
-                retryAfterMs: 0,
-            });
+    // Operator, 2026-11-24: "If the User is simply switching between FT4 and FT8 or visa
+    // versa - then this warning should not be there", and "If time is needed, this time is
+    // available while the slots are first decoded". On a switch the page closes its own
+    // stream and claims the other mode; from the desktop app the daemon hears the claim
+    // before the close and refuses it as busy, with no time to retry. That refusal is
+    // claimed again quietly, and the banner is for a mode that STAYS busy or a reason the
+    // operator has to act on.
+    const BUSY: ClaimResult = {
+        kind: 'refused',
+        code: 'ft8_profile_busy',
+        message: 'busy',
+        retryAfterMs: 0,
+    };
+    function claimHarness(answers: ClaimResult[], rest: ClaimResult) {
+        const opened: (string | undefined)[] = [];
+        setFt8Transport((_h, mode) => {
+            opened.push(mode);
+            return () => undefined;
+        });
+        const claims: string[] = [];
+        const banners: (string | null)[] = [];
+        setFt8Claimer((mode) => {
+            claims.push(mode);
+            // What the page shows at the moment of each claim: a banner that flashed
+            // between two claims would be recorded here.
+            banners.push(ft8State.claimRefusal?.code ?? null);
+            return Promise.resolve(answers[claims.length - 1] ?? rest);
+        });
+        return { opened, claims, banners };
+    }
+
+    it('a plain switch refused as busy is claimed again quietly: no banner, then the stream opens', async () => {
+        const h = claimHarness([BUSY, BUSY], { kind: 'ok', mode: 'FT4' });
+        await startFt8('ft4');
+        expect(h.claims).toEqual(['ft4']);
+        expect(h.opened).toEqual([]);
+        expect(ft8State.claimRefusal).toBeNull();
+
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS);
+        expect(h.claims).toEqual(['ft4', 'ft4']);
+        expect(ft8State.claimRefusal).toBeNull();
+
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS);
+        expect(h.claims).toEqual(['ft4', 'ft4', 'ft4']);
+        expect(h.opened).toEqual(['ft4']);
+        expect(ft8State.profile).toBe('FT4');
+        expect(ft8State.claimRefusal).toBeNull();
+        expect(h.banners).toEqual([null, null, null]);
+
+        // Granted: nothing is claimed again.
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(h.claims.length).toBe(3);
+    });
+
+    it('a reason the operator must act on is shown at once when the quiet claim meets it', async () => {
+        const h = claimHarness([BUSY], {
+            kind: 'refused',
+            code: 'ft8_tx_armed',
+            message: 'armed',
+            retryAfterMs: 0,
         });
         await startFt8('ft4');
-        expect(ft8State.claimRefusal?.retryAt).toBe(0);
+        expect(ft8State.claimRefusal).toBeNull();
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS);
+        expect(ft8State.claimRefusal).toMatchObject({ code: 'ft8_tx_armed', retryAt: 0 });
+        expect(h.opened).toEqual([]);
+        // TX enabled is not waited out: the operator disables it or leaves.
         await vi.advanceTimersByTimeAsync(60_000);
-        expect(claims).toBe(1);
+        expect(h.claims.length).toBe(2);
+    });
+
+    it('a reason other than busy is never claimed again quietly', async () => {
+        for (const code of ['ft8_tx_armed', 'ft8_session_active', 'ft8_tx_in_flight']) {
+            stopFt8();
+            const h = claimHarness([], { kind: 'refused', code, message: 'x', retryAfterMs: 0 });
+            await startFt8('ft4');
+            expect(ft8State.claimRefusal?.code).toBe(code);
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(h.claims.length).toBe(1);
+        }
+    });
+
+    it('a mode that stays busy shows the banner after the quiet claims, and then the operator acts', async () => {
+        const h = claimHarness([], BUSY);
+        await startFt8('ft4');
+        // One claim short of the limit: still quiet.
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS * (QUIET_RECLAIMS - 1));
+        expect(h.claims.length).toBe(QUIET_RECLAIMS);
+        expect(ft8State.claimRefusal).toBeNull();
+
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS);
+        expect(h.claims.length).toBe(QUIET_RECLAIMS + 1);
+        expect(ft8State.claimRefusal).toMatchObject({ code: 'ft8_profile_busy', retryAt: 0 });
+        expect(h.opened).toEqual([]);
+
+        // Nothing more is scheduled: Try again, or leaving the view.
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(h.claims.length).toBe(QUIET_RECLAIMS + 1);
+    });
+
+    it('Try again gives the mode the same quiet claims, the banner gone meanwhile', async () => {
+        const h = claimHarness([], BUSY);
+        await startFt8('ft4');
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS * QUIET_RECLAIMS);
+        expect(ft8State.claimRefusal?.code).toBe('ft8_profile_busy');
+        const before = h.claims.length;
+
+        await reclaimFt8('ft4');
+        expect(ft8State.claimRefusal).toBeNull();
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS * QUIET_RECLAIMS);
+        expect(h.claims.length).toBe(before + QUIET_RECLAIMS + 1);
+        expect(ft8State.claimRefusal?.code).toBe('ft8_profile_busy');
+    });
+
+    it('leaving the view ends the quiet claims: nothing is claimed or opened afterwards', async () => {
+        const h = claimHarness([BUSY], { kind: 'ok', mode: 'FT4' });
+        await startFt8('ft4');
+        stopFt8();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(h.claims).toEqual(['ft4']);
+        expect(h.opened).toEqual([]);
+        expect(ft8State.claimRefusal).toBeNull();
+    });
+
+    it('switching back during the quiet claims leaves only the mode now wanted', async () => {
+        const opened: (string | undefined)[] = [];
+        setFt8Transport((_h, mode) => {
+            opened.push(mode);
+            return () => undefined;
+        });
+        const claims: string[] = [];
+        setFt8Claimer((mode) => {
+            claims.push(mode);
+            return Promise.resolve(mode === 'ft4' ? BUSY : { kind: 'ok', mode: 'FT8' });
+        });
+        await startFt8('ft4'); // refused as busy; a quiet claim is pending
+        stopFt8();
+        await startFt8('ft8'); // the operator went back
+        expect(opened).toEqual(['ft8']);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(claims).toEqual(['ft4', 'ft8']);
+        expect(opened).toEqual(['ft8']);
+    });
+
+    it('a busy refusal that names a time to retry keeps its banner and its countdown', async () => {
+        const h = claimHarness([{ ...BUSY, retryAfterMs: 4000 }], { kind: 'ok', mode: 'FT4' });
+        await startFt8('ft4');
+        expect(ft8State.claimRefusal?.code).toBe('ft8_profile_busy');
+        expect(ft8State.claimRefusal?.retryAt).toBeGreaterThan(Date.now());
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS * QUIET_RECLAIMS);
+        expect(h.claims.length).toBe(1); // the daemon's time, not the quiet step
+        await vi.advanceTimersByTimeAsync(4000);
+        expect(h.opened).toEqual(['ft4']);
     });
 
     it('a stop while the claim is in flight cancels the open', async () => {
@@ -1014,9 +1153,11 @@ describe('a terminal stream error re-claims the profile', () => {
     it('shows the refusal banner when the re-claim is refused, and opens nothing', async () => {
         ft8State.claimed = false;
         ft8State.connected = false;
+        // A reason shown at once. A busy refusal is first claimed again quietly
+        // (QUIET_RECLAIMS, proved in "profile claim before subscribe").
         const h = harness([
             { kind: 'ok', mode: 'FT4' },
-            { kind: 'refused', code: 'ft8_profile_busy', message: 'busy', retryAfterMs: 0 },
+            { kind: 'refused', code: 'ft8_tx_armed', message: 'armed', retryAfterMs: 0 },
         ]);
         await startFt8('ft4');
         h.handlers().onOpen();
@@ -1025,7 +1166,7 @@ describe('a terminal stream error re-claims the profile', () => {
         await vi.waitFor(() => expect(h.claims).toEqual(['ft4', 'ft4']));
         expect(h.opened).toEqual(['ft4']);
         expect(ft8State.claimed).toBe(false);
-        expect(ft8State.claimRefusal?.code).toBe('ft8_profile_busy');
+        expect(ft8State.claimRefusal?.code).toBe('ft8_tx_armed');
         stopFt8();
     });
 
@@ -1123,8 +1264,10 @@ describe('a claim that could not reach the daemon is retried on the recovery sig
     it('a daemon refusal is not retried on those signals — the hint or the operator decides', async () => {
         ft8State.claimed = false;
         ft8State.connected = false;
+        // Not busy: that one refusal is claimed again on a timer (QUIET_RECLAIMS),
+        // which is not these signals either.
         const h = harness([
-            { kind: 'refused', code: 'ft8_profile_busy', message: 'busy', retryAfterMs: 0 },
+            { kind: 'refused', code: 'ft8_tx_armed', message: 'armed', retryAfterMs: 0 },
         ]);
         await startFt8('ft4');
         expect(ft8State.claimRefusal?.transport).toBe(false);

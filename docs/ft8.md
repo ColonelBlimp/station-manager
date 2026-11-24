@@ -214,7 +214,13 @@ release uses gonum.
 > again rather than its URL repeated: a grant reopens the stream, a refusal shows the
 > banner. A claim that cannot reach the daemon is retried when the window comes back
 > online or the tab is shown (the stream's own revival signals), and a banner with no
-> countdown and nothing to stop offers **Try again**. The banner speaks in the operator's
+> countdown and nothing to stop offers **Try again**. A plain change between FT8 and FT4
+> shows no banner (operator, 2026-11-24): the view closes its own stream and claims at
+> once, the daemon can hear the claim first and refuse it as busy with no time to retry,
+> and that one refusal is claimed again quietly (`QUIET_RECLAIMS` claims,
+> `QUIET_RECLAIM_STEP_MS` apart, about three seconds, in `ft8.svelte.ts`). The banner
+> follows only if the mode stays busy through them, or at once for any other reason (TX
+> enabled, a contact, a transmission). The banner speaks in the operator's
 > terms, not the daemon's (`claimRefusal.ts`; operator, 2026-11-24): for each reason it
 > knows by its code it names the mode wanted and the mode still in the way ("FT8 is still
 > open, and only one of FT8 and FT4 can be open at a time."), and it says "try again" only

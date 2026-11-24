@@ -5564,3 +5564,48 @@ them is in its own tests, and the scenario's page vetoes its unload as that guar
 **Reference.** `docs/v2-design/api-endpoints.md` now says that the app sends the exit
 report, the disarm and the read of FT8's state at a close, and repeats a stale exit;
 `desktop/README.md` gains "Closing the app".
+
+### A change between FT8 and FT4 from the desktop app is refused by the page's own closing stream (2026-11-24; the page now claims again quietly, on the operator's choice)
+
+The fault came with the desktop app: the page's order (close its stream, then claim the other
+mode) did not change, but the daemon now hears the claim before the close. The two inbox
+entries of 2026-11-24 are moved here whole, as they were written, with the morning's first.
+The morning's entry called the race old and rare; the afternoon's measurement corrects that.
+
+**The rule (operator, 2026-11-24):** "If the User is simply switching between FT4 and FT8 or
+visa versa - then this warning should not be there. Only if either mode has been 'TX Enabled'
+should this then be seen". And on the cure: "If time is needed, this time is available while
+the slots are first decoded... nothing is displayed for 30s or 15s depending on the mode".
+
+**What was built** (`frontend/app/src/lib/operate/ft8.svelte.ts`, `QUIET_RECLAIMS` and
+`QUIET_RECLAIM_STEP_MS`): a refusal `ft8_profile_busy` that names no time to retry is claimed
+again with no banner, up to 12 more claims 250 ms apart. Any other reason shows at once. A
+mode still busy after them shows the banner as before. Leaving the view or changing mode
+again ends them. The two numbers are Claude's, inside the time the operator named; his to
+change. The daemon is unchanged: it still refuses the first claim, and the page hides it.
+Tests: eight new in `ft8.svelte.test.ts`; three of the view's (`Ft8View.claim.svelte.test.ts`)
+run a clock past the quiet claims. Reversion proof in a temporary copy: six tests fail.
+
+**Not built:** the claim naming the stream it replaces (a daemon change, Claude's first
+recommendation). **Not measured:** why the desktop app reverses the order. **Not yet tried in
+the real app.** **Open, the operator's:** the banner's sentence "If you have just switched,
+try again in a few seconds." now shows only after three seconds of trying.
+
+The inbox entries, as written:
+
+- [2026-11-24] **FT4 "is not available yet: another subscriber holds a capture on the other profile", with only "Try again" (operator's report, screenshot; diagnosed from the code and the daemon's log; not fixed).** Switching the FT view from FT8 to FT4 showed the refusal and did not retry by itself.
+   - **What the log shows** (read-only): the claim for FT4 was refused `409` at 07:29:49 local; in the same second, after it, the page's FT8 stream is logged as disconnected; five seconds later, "no subscribers; capture released". There was one FT8 subscriber, and it was going.
+   - **Why, from the code.** The page closes its own FT8 stream and claims the other profile at once (`startFt8`, `frontend/app/src/lib/operate/ft8.svelte.ts`). The daemon refuses a claim while the other profile still has a subscriber (`ClaimProfile`, `internal/ft8/profile_claim.go`), and gives the page a time to retry only once the capture's linger has begun, which starts when the last subscriber has been seen to leave. A claim that arrives before the daemon has noticed the page's own stream closing is therefore refused with no retry time, and the page shows "Try again" and waits for the operator. That the remaining subscriber was the page's own closing stream is an inference from the order of those three log lines.
+   - **How often.** 4 refusals in 197 claims in this station's log: three on 2026-09-12, one today. So it is a race that was already there, not something the build of 2026-11-23 brought.
+   - **What works now:** "Try again", a few seconds later.
+   - **Not designed:** the cure. Candidates are a retry time on every such refusal, or the page retrying a refusal that follows its own close. Either wants its acceptance criteria first.
+   - **The words, changed the same day on the operator's direction** ("The FT4 subscriber message is ambiguous and almost meaningless unless you are the developer who knows what a subcriber refers to. Let's also change this message for some more useful!"). The banner now says, for this refusal, "Station Manager is still receiving FT8, and it can receive only one of FT8 and FT4 at a time.", adding "If you have just switched, try again in a few seconds." only while the "Try again" button is shown; the other three refusals and the archive switch have words of the same kind (`frontend/app/src/lib/operate/claimRefusal.ts`). The words are Claude's proposal, shown to the operator before building and not changed by him. The race itself is as it was: the page still does not retry by itself, and one automatic retry after a second is proposed and not ruled.
+   - **Two of those sentences corrected after the commit's clean-room review (b8ad8dba), proposed and not yet confirmed by the operator.** "Station Manager is still receiving FT8…" claimed reception where only a stream of FT8 is open; it becomes "FT8 is still open, and only one of FT8 and FT4 can be open at a time." And "A transmission is in progress on FT8. FT4 can start when it has finished." was wrong twice (a send is "in flight" while it waits for its slot, and TX is still enabled when it ends); it becomes "FT8 is transmitting, or about to. Disable TX to change to FT4." That sentence was corrected once more after the clean-room review of 0e996b94: a send cancelled before keying still holds the transmit slot for a moment, with nothing on the air, so it now reads "FT8 is still busy with a transmission. Disable TX to change to FT4."
+   - **The repeat limit, asked the same day** ("Item 3, is a config change only?"): yes. It is Settings, FT8, "Repeat cap", 1 to 10; this station had 3 when that was asked, and the operator raised it to 6 at 07:50 local the same day; the default is 5; it applies at once.
+- [2026-11-24] **Every FT8/FT4 switch from the desktop app is refused with "is not available yet" and "Try again" (operator's report at 15:05 local, screenshot; diagnosed from the daemon's log, read-only; not fixed). This corrects the entry above of the same day, which said the race was old and rare.**
+   - **The operator's rule, stated the same minute:** "If the User is simply switching between FT4 and FT8 or visa versa - then this warning should not be there. Only if either mode has been 'TX Enabled' should this then be seen".
+   - **What the log shows today:** the app opened on FT4 (15:00:54, the mode it remembered). Two changes to FT8 were refused `409`, at 15:05:00 and 15:05:29; each time the page's own FT4 stream is logged as closed 1 to 2 ms after the refusal. "Try again" at 15:06:00 was granted.
+   - **What the log shows across its whole length:** 40 changes were granted with the old stream closing within two seconds. Where the log has millisecond times (12 of them, 2026-09-13 to 2026-11-02), the old stream's close is logged 2 to 5 ms before the claim, every time. Today, from the desktop app, it is logged after the claim, every time: three changes with a stream open (07:29, 15:05:00, 15:05:29), three refusals.
+   - **So:** the page closes its stream and claims the other mode at once, as it always did; the daemon now learns of the close after the claim, not before. The order reversed with the move to the desktop app. Why it reversed is an inference, not measured: the desktop app reaches the daemon differently from the browser tab the earlier figures came from.
+   - **The cure, chosen by the operator the same hour** ("If time is needed, this time is available while the slots are first decoded... nothing is displayed for 30s or 15s depending on the mode"): the page claims again quietly. A busy refusal with no time to retry gets up to 12 more claims, 250 ms apart (about three seconds; the two numbers are Claude's, inside the time the operator named, and his to change), with no banner; any other reason shows at once; a mode still busy after them shows the banner as before. In the working tree (`frontend/app/src/lib/operate/ft8.svelte.ts`, `QUIET_RECLAIMS`), not committed, not deployed. Claude's first recommendation (the claim names the stream it replaces, changing the daemon) is not built.
+   - **Open:** the banner's sentence "If you have just switched, try again in a few seconds." now shows only after the page has already tried for three seconds, when something else holds the other mode; whether it should say so is the operator's. Not measured: why the desktop app reverses the order.

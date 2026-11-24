@@ -23,6 +23,8 @@ import {
     setFt8Transport,
     setFt8Claimer,
     setFt8TxActions,
+    QUIET_RECLAIMS,
+    QUIET_RECLAIM_STEP_MS,
     type ClaimResult,
 } from './ft8.svelte';
 
@@ -129,7 +131,20 @@ describe('Ft8View — stop paths through a refused claim', () => {
     afterEach(() => {
         cleanup();
         setMode('phone');
+        vi.useRealTimers();
     });
+
+    // A busy refusal with no time to retry is claimed again quietly before its banner
+    // shows (ft8.svelte.ts QUIET_RECLAIMS). A test that wants that banner runs the clock
+    // past those claims; shouldAdvanceTime keeps findBy and waitFor working meanwhile.
+    function fakeClock(): void {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+    }
+    async function pastTheQuietClaims(): Promise<void> {
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS * QUIET_RECLAIMS);
+    }
+    const claimsOf = (entries: string[], mode: string): number =>
+        entries.filter((e) => e === `claim:${mode}`).length;
 
     it('ft8_tx_armed: Disable TX disarms the daemon and re-claims', async () => {
         wireDaemon({ busy: false, inFlight: false, session: false, armed: true }, log);
@@ -196,6 +211,7 @@ describe('Ft8View — stop paths through a refused claim', () => {
     it('a re-claim refused after the stop action shows the new reason, and opens nothing', async () => {
         // The stop cleared TX, but another subscriber took a capture meanwhile:
         // the banner tells the truth about the second refusal instead of opening.
+        fakeClock();
         const d: Daemon = { busy: false, inFlight: false, session: false, armed: true };
         wireDaemon(d, log, (daemon) => (daemon.busy = true));
         render(Ft8View);
@@ -203,7 +219,13 @@ describe('Ft8View — stop paths through a refused claim', () => {
         const banner = await screen.findByTestId('ft8-claim-banner');
         await fireEvent.click(within(banner).getByRole('button', { name: 'Disable TX' }));
 
-        await vi.waitFor(() => expect(log).toEqual(['claim:ft4', 'arm:false', 'claim:ft4']));
+        await vi.waitFor(() =>
+            expect(log.slice(0, 3)).toEqual(['claim:ft4', 'arm:false', 'claim:ft4'])
+        );
+        // Busy is first claimed again quietly: no banner while that lasts.
+        await vi.waitFor(() => expect(screen.queryByTestId('ft8-claim-banner')).toBeNull());
+        await pastTheQuietClaims();
+        expect(claimsOf(log, 'ft4')).toBe(2 + QUIET_RECLAIMS);
         const again = await screen.findByTestId('ft8-claim-banner');
         await vi.waitFor(() =>
             expect(
@@ -288,9 +310,12 @@ describe('Ft8View — stop paths through a refused claim', () => {
         cleanup();
 
         // Enter FT8 and have its claim REFUSED: what the daemon runs is unknown.
+        fakeClock();
         setMode('ft8');
         wireDaemon({ busy: true, inFlight: false, session: false, armed: false }, log);
         view = render(Ft8View);
+        await vi.waitFor(() => expect(claimsOf(log, 'ft8')).toBe(1));
+        await pastTheQuietClaims();
         await screen.findByTestId('ft8-claim-banner');
         expect(ft8State.profile).toBe('FT4'); // the remembered grant …
         expect(rig.mode).toBe('FT8'); // … is not the label any more
@@ -364,10 +389,15 @@ describe('Ft8View — stop paths through a refused claim', () => {
     });
 
     it('ft8_profile_busy: no stop path — another subscriber holds the capture; Try again re-claims', async () => {
+        fakeClock();
         const d: Daemon = { busy: true, inFlight: false, session: false, armed: false };
         wireDaemon(d, log);
         render(Ft8View);
 
+        // Quietly at first: no banner until the mode has stayed busy through every claim.
+        await vi.waitFor(() => expect(claimsOf(log, 'ft4')).toBe(1));
+        expect(screen.queryByTestId('ft8-claim-banner')).toBeNull();
+        await pastTheQuietClaims();
         const banner = await screen.findByTestId('ft8-claim-banner');
         // In the operator's words, and with "try again" said only because the button is there.
         expect(
@@ -379,14 +409,15 @@ describe('Ft8View — stop paths through a refused claim', () => {
         expect(within(banner).queryByRole('button', { name: 'Disable TX' })).toBeNull();
         expect(within(banner).queryByRole('button', { name: ABANDON_LABEL })).toBeNull();
         expect(opened).toEqual([]);
-        expect(log).toEqual(['claim:ft4']);
+        expect(claimsOf(log, 'ft4')).toBe(1 + QUIET_RECLAIMS);
+        expect(log.every((e) => e === 'claim:ft4')).toBe(true);
 
         // The other subscriber left; the operator asks again rather than leaving
         // and re-entering the view (codex aa31b612 P2).
         d.busy = false;
         await fireEvent.click(within(banner).getByRole('button', { name: 'Try again' }));
         await vi.waitFor(() => expect(opened).toEqual(['ft4']));
-        expect(log).toEqual(['claim:ft4', 'claim:ft4']);
+        expect(claimsOf(log, 'ft4')).toBe(2 + QUIET_RECLAIMS);
         expect(ft8State.claimRefusal).toBeNull();
     });
 });
