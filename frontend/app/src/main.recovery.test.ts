@@ -83,7 +83,7 @@ describe('main.ts: a start that meets a session left open with contacts', () => 
             await screen.findByRole('heading', { name: 'The last session is still open' })
         ).toBeInTheDocument();
         expect(document.body.textContent?.replace(/\s+/g, ' ')).toContain(
-            'The session that started 2026-11-20 09:15 UTC has 12 contacts and was never closed.'
+            'The session that started 2026-11-20 09:15 UTC has 12 contacts.'
         );
         expect(workspace()).toBeNull();
         expect(document.querySelector('nav')).toBeNull();

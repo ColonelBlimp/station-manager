@@ -42,12 +42,17 @@
                 <h1 class="text-2xl font-semibold text-ink">The last session is still open</h1>
             </div>
             <div class="space-y-3 py-4 text-ink">
+                <!-- Said of the session as it is now, and of nothing in its past (operator,
+                     2026-11-24; W-0029 part 5, question 3). Two earlier wordings are false
+                     in some case: "Station Manager did not close normally last time." for a
+                     session left open by a contact logged while no app was running; "and
+                     was never closed" for a session that was closed, continued, and then
+                     left open (the start shown is the session's first). -->
                 <p>
-                    Station Manager did not close normally last time. The session that started
+                    The session that started
                     {startedAt(recovery.session.openedAt)} has {contacts(
                         recovery.session.contactCount
-                    )}
-                    and was never closed.
+                    )}.
                 </p>
             </div>
             {#if recovery.error !== ''}

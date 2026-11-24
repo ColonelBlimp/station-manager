@@ -54,11 +54,15 @@ describe('RecoveryCard — the question', () => {
         expect(
             screen.getByRole('heading', { name: 'The last session is still open' })
         ).toBeInTheDocument();
+        // Said of the session as it is now, and of nothing in its past (operator,
+        // 2026-11-24). "Station Manager did not close normally last time" is false for a
+        // session left open by a contact logged while no app was running; "was never
+        // closed" is false for one that was closed, continued, and then left open.
         expect(
-            screen.getByText(
-                'Station Manager did not close normally last time. The session that started 2026-11-20 09:15 UTC has 3 contacts and was never closed.'
-            )
+            screen.getByText('The session that started 2026-11-20 09:15 UTC has 3 contacts.')
         ).toBeInTheDocument();
+        expect(screen.queryByText(/did not close normally/)).toBeNull();
+        expect(screen.queryByText(/never closed/)).toBeNull();
         expect(
             screen.getByText(
                 'If you start a new one, the earlier session is closed and kept, with its contacts.'
@@ -72,8 +76,8 @@ describe('RecoveryCard — the question', () => {
     });
 
     it.each([
-        [1, 'has 1 contact and was never closed.'],
-        [0, 'has 0 contacts and was never closed.'],
+        [1, 'has 1 contact.'],
+        [0, 'has 0 contacts.'],
     ])('a session with %i: "%s"', async (n, tail) => {
         await show({ kind: 'ok', state: question(n) });
         expect(screen.getByText(new RegExp(tail.replace('.', '\\.')))).toBeInTheDocument();

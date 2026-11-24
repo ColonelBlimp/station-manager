@@ -742,6 +742,25 @@ above are left as written.
   no limit of the switch's own. Step 3's "each bounded by the existing `ft8QsoLogTimeout`"
   is not a bound on the write: the write does not inherit that context.
 
+## Update 2026-11-24
+
+Operator ruling (chat, 2026-11-24: "1-3 accepted - add some neutral working for 3"), said of
+the questions of part 5's acceptance criteria in
+[W-0029](../work/W-0029-operating-sessions.md). One of them touches this text. The passages
+above are left as written.
+
+- **The recovery question says nothing of how the app ended.** §6 has it shown "only after a
+  crash or unconfirmed exit" and has it say "that the previous sitting did not end normally".
+  §2's safety net makes one more way to reach it: a contact logged by a live path while no
+  app is running opens a session that nobody holds, and the next start finds an open session
+  with a contact in it. The question is asked there too, and its text names the session (its
+  start and its contact count) and nothing of its past: not a cause, and not "was never
+  closed", which is false for a session that was closed, continued (§8) and then left open.
+  The alternatives
+  weighed and not taken: a wording of its own for a session nobody holds; and refusing a
+  live contact that does not come from the current app, which would add a reason to refuse
+  a contact.
+
 ## Open questions
 
 **All settled (operator, 2026-11-12):** O9 ruled; O1, O2, O3 and O10 stay deferred, each with the

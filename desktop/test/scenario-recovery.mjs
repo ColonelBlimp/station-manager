@@ -262,9 +262,7 @@ export async function runRecovery() {
         };
         check(
             'A second start meets that session: the question is what loads, naming it and its one contact',
-            /The session that started \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC has 1 contact and was never closed\./.test(
-                text
-            ),
+            /The session that started \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC has 1 contact\./.test(text),
             text.slice(0, 220)
         );
         check(

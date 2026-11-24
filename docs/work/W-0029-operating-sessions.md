@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** (the last section). The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex has not yet read the revision. Built so far: the recovery screen's sentence (question 3), nothing of the membership.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -268,6 +268,19 @@ next part starts.
 - **2026-11-23 (operator): "commit and push"**, of the correction to the desktop
   scenario that the clean-room review of `ef9b8968` called for, said after Codex closed
   its review of it (codex-231).
+- **2026-11-24 (operator): "start on part 5".** The criteria first, as for parts 1 to 4.
+- **2026-11-24 (operator): "1-3 accepted - add some neutral working for 3".** Said of the
+  three questions at the end of part 5's acceptance criteria, each as recommended:
+  1. **Part 5 is held by not being connected:** built, tested and committed, with the
+     daemon's ordinary start left as it is until part 6's change connects it. Fixes can be
+     deployed in between.
+  2. **The wait at app start for unfinished FT8 logging has no time limit of its own.**
+  3. **The recovery screen says one thing that is true in every case.** The sentence
+     "Station Manager did not close normally last time." is removed, and so, after Codex's
+     review of the first change (codex-256), is "and was never closed": what stays is "The
+     session that started … has N contacts." No lock is added to the daemon against a
+     script (asked and answered the same day, at the end of part 5's criteria). ADR 0100 §6
+     gains a dated update.
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -4473,3 +4486,287 @@ request to the station's daemon.
 manager that no test covers. The daemon's log. The one measurement the criteria name (how
 long an FT8 completion takes to store). Each needs the operator's agreement for the
 occasion. Nothing was transmitted and no rig command was sent for this.
+
+### Part 5: acceptance criteria (2026-11-24; revised after Codex's reviews, codex-255 and codex-256; its three questions ruled 2026-11-24; nothing of the membership built)
+
+Directed by the operator, 2026-11-24: "start on part 5". As with parts 1 to 4, the criteria
+come first and nothing is built until they are reviewed and their questions ruled.
+
+**What Codex's review changed (codex-255; each claim checked in the tree before it was
+taken).**
+1. **B4 is a real case, with tests already beside it.** With A the default, a request that
+   names A and asserts B passes the guard as a deliberate submit and is stored in A, even
+   while live entry is sealed (`TestDefaultGuard_SealedEntryKeepsDeliberateSubmitsDeliberate`).
+   B4 now names it and says how the classification travels.
+2. **D2 was a data race as written.** The admission's current lifetime is a plain field
+   under its lock. The holder is now a value the admission publishes, read synchronised.
+3. **D5's state can be reached.** A switch that fails to reopen leaves a running app with no
+   session and its scopes stopped (`TestSwitchSession_AFailedReopenIsRepairedByTheAppsOwnFlow`).
+   D5 is rewritten as the orderings to test, each judged by session and holder.
+4. **E1 named the wrong place.** The wait belongs to the admissions that perform a start,
+   not to the shared helper, which a failed switch also calls without stopped scopes. E2 and
+   E5 now state the two answers on the wire and the shell's own time limit, which I had left
+   unread.
+5. **F1 and F3** say what the step returns and when the generation moves. **H** names the
+   holder in each exit case. **Question 1** says how (a) is wired; **question 3** gains
+   Codex's alternative.
+
+**What part 5 is.** From part 5 a contact logged while operating belongs to the session that
+is open: the link is written in the same database transaction as the contact, so the two are
+stored together or not at all. With it come two things earlier parts left to this one: the
+app's start waits for an earlier app's unfinished FT8 logging before it throws away a
+leftover session as empty (part 2, question 2), and the proof that a contact stored while an
+archive switch drains is in the session that switch closes (part 3).
+
+**What is already there** (read in the tree, 2026-11-24).
+- The table `operating_session_member` (log migration 0020): one row per contact, so a
+  contact is in at most one session; no cascade.
+- The logging step, `JoinOperatingSessionTx` (`internal/database/sqlite/operating_session.go`),
+  built and tested in part 1 on the caller's transaction. In order: a contact outside the
+  file's default logbook joins nothing and touches nothing; the arrival test and the
+  default-epoch test; if no session is open, a new one for the holder it is given (none, if
+  that holder's exit is recorded); the member row. Its tests cover the join, the safety net,
+  the epoch test, the rollback with the contact, a contact outside the default logbook, the
+  arrival, and contention against the controls.
+- What reads membership: a remnant is empty when it has no member row, counting deleted
+  contacts; the read route's `has_contacts` and `contact_count`; the recovery question.
+- **Nothing in the daemon calls the step.** The contact's transaction is owned by
+  `qsoservice`'s `submit` (`internal/qsoservice/submit.go`): the QSO row, then one
+  upload-queue row per route, then the commit. The page's "live" classification
+  (`requireLiveSubmit`) stops at the handler and is not passed to `qsoservice`. The FT8
+  completion sink calls the same `Submit`. The batch import has a transaction of its own;
+  restore has its own path. Every member row in the API, daemon and desktop tests is put
+  there by the test's own SQL.
+- The wait for FT8 completion work (`drainFt8Completions`: the hand-over, then every tracked
+  job; it cancels none) is used by the exit and by the switch, and not by an app start.
+
+**What the operator sees.** With part 5 alone at the station, one thing: after a crash, a
+power cut or a close the daemon did not confirm, the next start asks Continue or New, where
+today it never does. The Session panel would still show the window's own list, so the answer
+would change nothing on the screen. That is why the brief holds part 5 until part 6
+(question 1). Nothing else changes: no contact is refused or delayed for a session's sake.
+This describes part 5 connected. As ruled (question 1), the ordinary start stays
+unconnected until part 6: at the station a contact writes no member row and no start asks,
+exactly as today.
+
+**A. Who joins.** Judged on rows read back after the commit.
+1. A Phone/CW submit that `requireLiveSubmit` classified live, into the default logbook: the
+   QSO row, its upload-queue rows and one member row for the open session, in one commit.
+2. A contact from the FT8 completed-exchange sink: the same.
+3. A member's logbook is always its session's logbook (the epoch test runs first).
+4. A forced duplicate that is stored joins like any other.
+5. A submit that stores nothing changes no session state and opens no session: a refused
+   duplicate, a validation failure, an unknown or retired logbook.
+
+**B. Who never joins.** Each tried with a session open, into the default logbook where the
+path allows it: no member row, the session and the generation as they were.
+1. `SubmitImport`; `SubmitImportBatch`, and its record-by-record fallback.
+2. `Restore` and `RestoreInto`; an archive copy or transfer.
+3. A submit that names a logbook other than the default.
+4. A submit to the default logbook that was not classified live: with A the default, a
+   request that names A and asserts B. It is stored in A as a deliberate submit, today and
+   after part 5, and joins nothing: no new member row, the same generation. `Submit` has two
+   production callers, the handler and the FT8 completion sink: the handler passes the
+   guard's classification, the sink is marked eligible outright, and the check that the
+   contact's logbook is the file's default stays inside the transaction for both. The import
+   flag is not reused for this: it also changes the UUID and forwarding behaviour.
+5. Contacts logged before this ships: the migration and the first start add no row.
+6. Structural: in production code the member table is written by the logging step only.
+
+**C. Order, and what cannot stop a contact.**
+1. Inside the contact's transaction: the QSO row, its upload-queue rows, then the logging
+   step. That is the sequence part 1's contention tests already run.
+2. No session state refuses or delays a live contact. With a remnant waiting for its answer
+   (recovery pending) the contact joins the remnant; with no session open it opens one (D);
+   after a default change it closes the old session as `logbook_changed` and joins a new one.
+   What already refuses a live submit stays as ruled and is not a session decision: the
+   seal of a default change, of an archive switch and of a closing app.
+3. A database failure in the step rolls back the QSO and its queue rows. The caller gets what
+   a failed insert gives today, and nothing reports the contact as logged: no `qso.stored`,
+   no FT8 logged event, no upload attempted.
+4. Contention is not a failure, shown through the real submit and not only the storage
+   helper: live submits against New, Continue, an exit and a default-pointer change, on a
+   database file with the production connection settings. Every stored contact has exactly
+   one member row (none for a non-default logbook), and no submit fails for contention.
+5. Logging never takes the admission's lock (the brief's order: the live-entry gate, the
+   session's serialization, the transaction), and neither does anything a completion job
+   does after its commit that a drain waits for. Shown by a submit that completes, with its
+   notifications, while that lock is held; E depends on it.
+
+**D. The session a contact opens (the safety net).**
+1. It is held by the lifetime the admission has published as holding: set when an admission
+   succeeds; cleared at that lifetime's confirmed exit, before the live-entry seal is
+   released; left as it was by a replacement that fails, although the scopes are then
+   stopped. With none published, or with that lifetime's exit recorded in the file, the
+   session is held by nobody. The check against the recorded exit stays in the transaction.
+2. That value is published and read synchronised, never by reading the admission's own
+   field outside its lock. It is read once, at the join, after the QSO's insert has taken
+   the writer's position. It is one observation, not atomic with the transaction.
+3. It is always a new session. No closed session is continued by a contact.
+4. The orderings, each judged by which session holds the contact and who holds that session,
+   not by a count of rows:
+   - A running app A with no session and its scopes stopped (a switch failed to reopen),
+     the file writable again, and a live submit that wins the writer's position before A is
+     admitted again: the session is A's; A's next admission keeps it and asks nothing.
+   - The same, and another app B replaces A: B finds A's session with the contact in it and
+     is asked Continue or New.
+   - A live submit before any lifetime has been admitted in this process, or after a
+     confirmed exit: a session held by nobody; the next app start asks (question 3).
+
+**E. The wait before a leftover session is judged empty** (owed since part 2).
+1. **Where.** In the admissions that perform a start: a first admission or a replacement,
+   after the scopes are retired and before the start's transaction; and the same lifetime
+   admitted again with its scopes left stopped. Not in the current lifetime's ordinary
+   repeat, which starts nothing; not in the closing phase of a switch, which gives no
+   session; and not in the shared start helper, because a failed switch calls it too, after
+   its seals are released and without stopped scopes.
+2. **Nowhere else, and why.** New and Continue take effect in the database's writer order,
+   so a contact lands before or after them and joins what is then open. The epoch test is
+   inside the logging transaction. A daemon start's arrival runs before that process
+   accepts work.
+3. **What it waits for:** the hand-over of a contact earned in the slot under way, then
+   every tracked job. A test that holds a job only after it is tracked cannot pass for the
+   hand-over: the evidence includes a contact still between slot and job.
+4. **The two answers.** With a job held before its write, an admission of a new lifetime
+   does not answer. Released, the job stores. Then `POST /v1/app/lifetime` answers a
+   successful admission, current, and `GET /v1/operating-session` for that lifetime answers
+   `recovery_pending`; the contact's member row names the leftover session's original id;
+   no session was opened or discarded.
+5. With nothing pending the wait returns at once and the admission is as it is today.
+6. No job is cancelled, and the wait has no limit of the admission's own (question 2).
+7. **The shell's own limit** (read in `desktop/src/admission.mjs` and `waiting.mjs`): each
+   of its requests gives up after five seconds; the waiting page stays up and it tries again
+   a second later. The daemon's start is not bound to the request. So: an answer lost or
+   timed out, then the same lifetime tried again, is one admission and the same leftover
+   session. A time limit in the shell never causes a session with a job pending to be
+   discarded.
+
+**F. Events and reads.**
+1. The step returns the session joined and, when its transaction advanced the generation,
+   the generation that transaction produced, not a later read, which could report another
+   writer's. Paired with the served archive's id where the daemon is composed, that makes
+   one `operating_session.changed` after the commit.
+2. A plain join advances nothing and publishes no `operating_session.changed`: joining is
+   not a transition (ADR 0100 §1). A safety-net open, or an epoch close followed by an
+   open, is one advance and one event. `qso.stored` is published for every stored contact
+   after the commit, as today, whether or not it joined.
+3. A transaction that rolls back publishes nothing. Shown with an upload-queue row really
+   in the transaction: afterwards the session's state, the queue, the QSO and the events
+   are all as before.
+4. After a plain join the read route answers `has_contacts` true and the new
+   `contact_count`, with the generation unchanged.
+
+**G. Later changes.** Rows, after each: an edit of a member's time, band, mode or call keeps
+its row; a delete keeps its row, `has_contacts` stays true and `contact_count` drops; an
+undelete brings the count back.
+
+**H. Owed by part 3, and the same for the exit.** A Phone/CW contact admitted before a
+switch's seal and stored while it drains, and an FT8 completion stored by the drain, are
+members of the session the switch closes as `archive_switched`, which is kept, not
+discarded. At an exit: with the exiting lifetime holding the session, a completion stored
+by the exit's drain is a member of the session then closed as `app_closed`; an exit while a
+recovery is pending leaves the other holder's session open, with the contact in it. If the
+drained work advances the generation, the exit is answered as stale and repeated, as built;
+the test names which session holds the contact once the exit is acknowledged.
+
+**After an install, restated.** The brief's upgrade scenario was written before A3. With A3
+at the station: the app left running is admitted again by the new daemon and holds the
+session the start step gives it; a contact then joins it; a normal close confirms the exit
+and the next start asks nothing; a kill leaves it open and the next start asks once.
+
+**Not in part 5.** The panel, the rail's count, the clock and the controls (part 6); how a
+window learns that a stored contact is a member (part 6); the Map (7); email and export (8);
+the FT8 repeat hold (9); adding or removing a member (ADR 0100, O2).
+
+**How it will be shown.** Tests first, each seen to fail. `internal/database/sqlite` has the
+step's own tests already. New: `internal/qsoservice` against a real database (A, B, C, D, F);
+`internal/api` for the classification reaching the transaction and for the admission's wait
+(B4, C5, E); `cmd/smd` through the real daemon for the FT8 sink and the two drains (A2, E2,
+H). Reversion proofs in temporary copies. No transmission, keyed test or rig command: the
+scopes run against the test keyer.
+
+**Proposed slices.** First the step in the submit's transaction, with the classification,
+the holder and the event (A to D, F, G). Then the admission's wait and the drains (E, H).
+
+**Questions for the operator. All three ruled 2026-11-24, each as recommended (Rulings,
+above): 1 as (a), 2 as no limit, 3 as (b).**
+1. **How part 5 is held until part 6.** Either (a) part 5 is built, tested and committed, but
+   the daemon does not connect it until part 6's change does, so fixes can still be deployed
+   in between; or (b) it is connected at once and nothing is deployed until part 6 is ready.
+   I recommend (a), and Codex supports it. How (a) is wired: one internal function connects
+   the join, the holder, the event and the admission's wait; the daemon's tests call it now
+   and the ordinary start calls it in part 6. No configuration key and no switch an operator
+   could set. The ordinary start as shipped is tested too: a contact is stored, no member
+   row is written, and no start asks about it.
+2. **The wait at app start for unfinished FT8 logging.** I recommend no time limit of its
+   own (Codex recommends the same), as ruled for the archive switch on 2026-11-21: the app stays on its waiting page
+   until that logging has finished. The other choice is a limit, after which the app starts
+   and an empty leftover session is discarded; a contact that lands later still joins
+   whichever session is then open.
+3. **A contact logged with no app running** (a script using the live route after a
+   confirmed exit, or before any app has started). It opens a session held by nobody, and
+   the next start shows part 4's screen: "The last session is still open", then "Station
+   Manager did not close normally last time", which is not what happened. Three choices:
+   (a) accept it, as rare; (b) make that one sentence true in both cases, which Codex
+   recommends, with wording such as "The previous operating session is still open."; (c) a
+   sentence of its own for the session nobody holds, which needs the daemon's answer to say
+   so. I recommend (b): one sentence that is never false, and nothing more to build. The
+   words are yours to choose when it is built.
+
+**On question 3, asked by the operator (2026-11-24): "is there anyway to prevent a script
+from execising the daemon and thus logging with no app running?"** Not decided; what was
+answered:
+- **Not absolutely.** The log route (`POST /v1/qso`) asks for the operating credential, the
+  archive and the default-logbook assertion, and for no app lifetime (`server.go`,
+  `requireOperatingClient`). A script holding the credential is the operator's own, and the
+  daemon cannot tell it from the app by the credential.
+- **What could be added:** the live log route accepts only the app lifetime that is current,
+  as FT8's controls do. A script with no app running would then be refused. The cost is a
+  new way for a real contact to be refused (a page not yet admitted again after a daemon
+  restart; a window that has been replaced), against the standing rule that only a broken
+  local database stops a contact; and a script could still have itself admitted as an app,
+  which retires the real one. Claude does not recommend it.
+- **What removes the case in practice:** a script that adds contacts uses the import route,
+  or a deliberate submit, neither of which joins a session (B1, B3, B4). The helper used on
+  2026-11-24 to add two contacts by hand went through the live route with the app running;
+  from part 5 such contacts would join the running app's session, hours after they were
+  made. That helper should change to the import route before part 5 is connected.
+
+**Question 3, built the day it was ruled (2026-11-24; uncommitted when written).** The
+recovery screen's paragraph now reads "The session that started 2026-11-20 09:15 UTC has 3
+contacts." under the heading "The last session is still open"
+(`frontend/app/src/lib/ui/RecoveryCard.svelte`). It took two changes, each with its tests
+changed first and seen to fail on the old words:
+- The first removed "Station Manager did not close normally last time." and kept "and was
+  never closed."
+- Codex's review (codex-256) showed that the words kept are false too. A session with a
+  contact can be closed, continued by the operator, and left open when that app ends
+  without a confirmed exit; the next start asks about that same session, and the start it
+  shows is the session's first (`TestOperatingSession_Continue_AClosedSession`: the id and
+  the first start survive a Continue, with a confirmed first interval and an open second).
+  The paragraph now ends after the count. The card's test, the two page tests that load
+  the question and the desktop recovery scenario's pattern expect the new words.
+
+The screen still cannot appear at the station until part 5 is connected.
+
+**A correction to the answer above about scripts (codex-256, checked in the tree).** "The
+import route" does not exist: the daemon has no HTTP import route (`internal/api/server.go`
+registers none). Import is the offline command, `smctl import <file.adi>`: it stops the
+daemon, runs `smd import`, and starts the daemon again if it was running. It queues no
+upload unless `--forward <name>` says so (`cmd/smd/import.go`), where a live submit queues
+them by the logbook's bindings. So moving a hand-add from the live route to import changes
+three things for the operator: the daemon stops for the import, the contact is not sent to
+QRZ or any other service unless asked, and it joins no session. The only production caller
+of the HTTP submit in the repository is the Phone/CW form; the FT8 sink calls the service
+in Go.
+
+**Owed before part 5 is connected:**
+- The helper that adds contacts by hand, if it is used again: either it goes through
+  `smctl import` (with the differences above, the forwarding the operator's to choose each
+  time), or it stays on the live route and the contact joins whichever session is then
+  open. Not decided.
+- The desktop recovery and close scenarios (`desktop/test/scenario-recovery.mjs`,
+  `scenario-close.mjs`) log one contact through the page and then insert its member row
+  themselves. When part 6 connects the membership, both inserts go and the scenarios
+  assert the row the submit wrote; left in, they would collide with the primary key on
+  `qso_id`.

@@ -125,9 +125,7 @@ describe('main.ts: the early session read was for another archive than the one t
         expect(
             await screen.findByRole('heading', { name: 'The last session is still open' })
         ).toBeInTheDocument();
-        expect(document.body.textContent?.replace(/\s+/g, ' ')).toContain(
-            'has 5 contacts and was never closed.'
-        );
+        expect(document.body.textContent?.replace(/\s+/g, ' ')).toContain('has 5 contacts.');
         expect(workspace()).toBeNull();
         expect(ft8()).toBe(0);
     });
