@@ -652,23 +652,38 @@ func (c *sessionTx) exitNotCurrent(lifetime string) (SessionOutcome, error) {
 // In order: the QSO's logbook must be the file's default, or nothing is done
 // and no session is touched; the default-epoch test; if no session is open, a
 // new one, held by holder ("" for none, and none if the holder's exit is
-// recorded); the member row. It returns the
-// session joined, "" when the QSO joins none. No session policy refuses it. An
-// error is a database failure, and the caller rolls the QSO back with it.
-func (s *Service) JoinOperatingSessionTx(ctx context.Context, tx *sql.Tx, qsoID int64, holder string, now time.Time) (string, error) {
+// recorded); the member row. It returns what it did (SessionJoin). No session
+// policy refuses it. An error is a database failure, and the caller rolls the
+// QSO back with it.
+func (s *Service) JoinOperatingSessionTx(ctx context.Context, tx *sql.Tx, qsoID int64, holder string, now time.Time) (SessionJoin, error) {
 	const op errors.Op = "sqlite.Service.JoinOperatingSessionTx"
 	if err := checkService(op, s); err != nil {
-		return "", err
+		return SessionJoin{}, err
 	}
 	if tx == nil {
-		return "", errors.New(op).WithMsg("the QSO's transaction is required")
+		return SessionJoin{}, errors.New(op).WithMsg("the QSO's transaction is required")
 	}
 	c := &sessionTx{ctx: ctx, tx: tx, now: now.UTC(), served: s.servedActivation.Load()}
-	id, err := c.join(qsoID, holder)
+	joined, err := c.join(qsoID, holder)
 	if err != nil {
-		return "", errors.New(op).WithErr(err).WithMsg("put the QSO into the operating session")
+		return SessionJoin{}, errors.New(op).WithErr(err).WithMsg("put the QSO into the operating session")
 	}
-	return id, nil
+	return joined, nil
+}
+
+// SessionJoin is what the logging step did, for the caller to act on once its
+// transaction has committed (W-0029 part 5, F1).
+type SessionJoin struct {
+	// SessionID is the session the QSO joined, "" when it joined none.
+	SessionID string
+	// Advanced is whether the step's transaction advanced the session
+	// generation: it opened a session, or closed one. A join of the session
+	// already open advances nothing.
+	Advanced bool
+	// Generation is the generation that transaction produced, read inside it
+	// while it holds the writer's position, so it is never another writer's.
+	// 0 unless Advanced.
+	Generation int64
 }
 
 // openForContact is the logging step's safety net: the session a contact opens
@@ -689,30 +704,43 @@ func (c *sessionTx) openForContact(h sessionHead, holder string) (string, error)
 	return c.openNew(h, holder)
 }
 
-func (c *sessionTx) join(qsoID int64, holder string) (string, error) {
+func (c *sessionTx) join(qsoID int64, holder string) (SessionJoin, error) {
 	var isDefault bool
 	err := c.tx.QueryRowContext(c.ctx, `SELECT q.logbook_id IS (SELECT default_logbook_id FROM archive_metadata WHERE singleton = 1)
 		FROM qso q WHERE q.id = ?`, qsoID).Scan(&isDefault)
 	if err != nil {
-		return "", err // no such QSO included: the step is for a QSO written in this transaction
+		return SessionJoin{}, err // no such QSO included: the step is for a QSO written in this transaction
 	}
 	if !isDefault {
-		return "", nil
+		return SessionJoin{}, nil
 	}
 	h, o, err := c.start()
 	if err != nil || h.defaultUUID == "" {
-		return "", err
+		return SessionJoin{}, err
 	}
 	id := ""
 	if o != nil {
 		id = o.ID // an open session keeps the holder it has
 	} else if id, err = c.openForContact(h, holder); err != nil {
-		return "", err
+		return SessionJoin{}, err
 	}
 	if err := c.one(`INSERT INTO operating_session_member (qso_id, session_id) VALUES (?, ?)`, qsoID, id); err != nil {
-		return "", err
+		return SessionJoin{}, err
 	}
-	return id, c.finish()
+	if err := c.finish(); err != nil {
+		return SessionJoin{}, err
+	}
+	joined := SessionJoin{SessionID: id, Advanced: c.changed}
+	if !c.changed {
+		return joined, nil
+	}
+	// Read back in this transaction, which has held the writer's position
+	// since the QSO's row was written: the value is this transaction's own.
+	err = c.tx.QueryRowContext(c.ctx, `SELECT session_generation FROM archive_metadata WHERE singleton = 1`).Scan(&joined.Generation)
+	if err != nil {
+		return SessionJoin{}, err
+	}
+	return joined, nil
 }
 
 // SetServedActivation says which activation this process serves the file under

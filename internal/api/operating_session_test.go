@@ -88,7 +88,8 @@ func (b *sessionBed) restart() {
 	b.t.Helper()
 	a := &b.srv.admission
 	a.mu.Lock()
-	a.current, a.generation, a.retired, a.stopped, a.closing = "", 0, nil, false, false
+	a.setCurrent("")
+	a.generation, a.retired, a.stopped, a.closing = 0, nil, false, false
 	a.published.Store(0)
 	a.mu.Unlock()
 	b.scope.mu.Lock()
@@ -544,7 +545,7 @@ func TestOperatingSession_TheReadIsOneSnapshotOfTheFileAndTheAdmission(t *testin
 			t.Errorf("close in the gap: %v", err)
 		}
 		a.retired = map[string]struct{}{lifeA: {}}
-		a.current = ""
+		a.setCurrent("")
 	}
 	got := b.view(lifeA)
 	b.srv.sessionReadGap = nil

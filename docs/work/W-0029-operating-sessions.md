@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex has not yet read the revision. Built so far: the recovery screen's sentence (question 3), nothing of the membership.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built (2026-11-25, the last section; uncommitted when written) and, as ruled, not connected in the daemon's ordinary start. Its second slice, the admission's wait and the drains, is not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -269,6 +269,9 @@ next part starts.
   scenario that the clean-room review of `ef9b8968` called for, said after Codex closed
   its review of it (codex-231).
 - **2026-11-24 (operator): "start on part 5".** The criteria first, as for parts 1 to 4.
+- **2026-11-25 (operator): "slice 1 of part 5".** The first slice as proposed in part 5's
+  criteria: the step in the submit's transaction, with the classification, the holder and
+  the event (A to D, F, G).
 - **2026-11-24 (operator): "1-3 accepted - add some neutral working for 3".** Said of the
   three questions at the end of part 5's acceptance criteria, each as recommended:
   1. **Part 5 is held by not being connected:** built, tested and committed, with the
@@ -4770,3 +4773,88 @@ in Go.
   themselves. When part 6 connects the membership, both inserts go and the scenarios
   assert the row the submit wrote; left in, they would collide with the primary key on
   `qso_id`.
+
+### Part 5, slice 1: the logging step in the contact's transaction (built 2026-11-25; uncommitted when written)
+
+Directed by the operator, 2026-11-25: "slice 1 of part 5". Criteria A to D, F and G of the
+section above. **Nothing here changes what the station does:** as ruled (question 1), the
+daemon's ordinary start does not connect the membership, and a contact joins nothing until
+part 6's change connects it.
+
+**What was built.**
+- **The step says what its transaction did** (`internal/database/sqlite/operating_session.go`).
+  `JoinOperatingSessionTx` returned the session's id; it now returns `SessionJoin`: the id,
+  whether the transaction advanced the generation, and the generation it produced, read back
+  inside the transaction while it holds the writer's position (F1).
+- **A live submit** (`internal/qsoservice`). `SubmitLive` is `Submit` for a contact made
+  while operating. Both store identically. With the membership connected
+  (`SetSessionMembership`), `SubmitLive` runs the step last in the contact's transaction,
+  after the QSO row and its upload-queue rows (C1). `Submit` stays the deliberate submit and
+  joins nothing (B4); the import paths were not touched and cannot reach the step. A failure
+  in the step rolls the contact back and is returned as a failed insert is (C3).
+- **Who holds** (`internal/api/app_admission.go`). The admission publishes the lifetime it
+  holds in a value read without its lock. One function, `setCurrent`, writes the held
+  lifetime and the published value together: at a successful admission and at a confirmed
+  exit, where it is cleared before the exit's seal on live entry is released. A failed
+  replacement does not reach it (D1, D2).
+- **The route's classification reaches the transaction** (`internal/api/handler_qso.go`):
+  a submit `requireLiveSubmit` classified live calls `SubmitLive`, any other `Submit`.
+  The FT8 completion sink calls `SubmitLive` (`cmd/smd/lifecycle_adapters.go`).
+- **The connection** (`internal/api/operating_session.go`): `ConnectSessionMembership`
+  gives the service the published holder, the session's clock and the publisher of
+  `operating_session.changed` with the served archive's id. Nothing in production calls
+  it. Part 6's change adds the call, and the admission's wait of slice 2 belongs to the
+  same connection.
+
+**How each criterion is shown.** Tests first; each was seen to fail before its code existed,
+or was proved afterwards by undoing the code in a temporary copy of the repository
+(nineteen reversions, each failing the named test for the stated reason; none in the shared
+tree).
+- A1, A3, A4, A5, C1 to C3, D1 to D3, F1 to F3, G: `internal/qsoservice/session_membership_test.go`,
+  against a database file opened with the configuration's own connection settings, read back
+  through a second connection.
+- A1, B3, B4, C3, C5, D4 (three orderings), F1, F2, F4: `internal/api/session_membership_test.go`,
+  through the app listener's routes with the membership connected.
+- A2, and A1 again through the daemon's own composition; B5 (connecting adds no row for a
+  contact already logged); the ordinary start connecting nothing: `cmd/smd/session_membership_test.go`.
+- B1 (`SubmitImport`, the batch, its record-by-record fallback) and B2 (`Restore`,
+  `RestoreInto`): stored with a session open, the session's record unchanged.
+- B6, and ruling 1, as guards on the source (`session_membership_source_test.go`): which
+  production files may name the member table, the step, a live submit and the connection,
+  as allow-lists; no migration writes a member row; nothing in production calls the
+  connection.
+
+**Where the build differs from the criteria's words, for review.**
+1. **F1's "after the commit" is after the contact's own notices too.** The change is told
+   after `qso.stored` and the archive summary's notice. That order lets a test stand between
+   the commit and the telling and advance the generation there: the change told is still the
+   contact's own, which a later read would not be.
+2. **D1's clearing at the exit shows in no row.** With the published value left as the
+   exited lifetime, the file's own record of the exit already keeps a session from being
+   given to it. The value is therefore read directly in a test. That it is cleared *before*
+   the seal is released is by the order of two statements in one critical section; no test
+   races a submit against it.
+3. **G's undelete.** No route restores a deleted contact. The test restores the row as the
+   file would hold it and reads the count.
+4. **B2's "an archive copy or transfer"** is not exercised as behaviour: those paths do not
+   go through the submit, and the source guards are what keep them from the step.
+5. **`submit` was at the maintainability gate's floor.** Its "QSO stored" log line moved to
+   a function of its own, unchanged, to make room for the step.
+
+**Found while building: a writer that never pauses can fail a contact, with or without a
+session.** The first form of the contention test (C4) ran the controls in a loop with no
+pause. Under the race detector one live submit in several runs failed at its QSO insert
+with SQLite's "database is locked" when the busy limit passed: durable transactions back to
+back hold the writer's position nearly all the time, and SQLite's busy handler gives a
+waiting writer no turn. The failure is before the new step, in code part 5 did not change.
+The test now paces the controls by the submits (one round begun with each) and passed 35
+runs under the race detector. Not decided, and not part 5's: whether a contact that meets
+the busy limit should be tried again by the daemon instead of failing.
+
+**Gates.** The four packages under the race detector: exit 0. `go vet` and `gofmt` over the
+tree: clean. The maintainability gate: no regression. The whole local CI: run before any
+commit.
+
+**Not built, and owed.** Slice 2: the admission's wait and the two drains (E, H). At part
+6: the call that connects the membership; the two desktop scenarios' own member rows
+(above).

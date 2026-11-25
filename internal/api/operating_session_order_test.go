@@ -309,7 +309,7 @@ func TestSessionOrder_G3_SetupsSessionWaitsForAReplacementUnderWay(t *testing.T)
 	}
 	// The replacement completes: B is the lifetime held.
 	a.retire(lifeA)
-	a.current = lifeB
+	a.setCurrent(lifeB)
 	a.generation++
 	held = false
 	a.mu.Unlock()

@@ -48,6 +48,11 @@ type Service struct {
 	// (ADR 0084). Injected directly, not via the hub, whose subscribers can be
 	// evicted; it must not block. Nil (offline commands, tests) is a no-op.
 	commitNotifier atomic.Pointer[func()]
+
+	// membership connects a contact made while operating to the archive's
+	// operating session (session_membership.go). Nil until it is connected:
+	// then no contact joins a session.
+	membership atomic.Pointer[SessionMembership]
 }
 
 // SetCommitNotifier wires the post-commit dirty signal (see commitNotifier).

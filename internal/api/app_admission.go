@@ -162,6 +162,33 @@ type appAdmission struct {
 	// without mu, so a request is never held up behind a replacement that is stopping a
 	// scope.
 	published atomic.Uint64
+
+	// holder is current, published for the logging step (W-0029 part 5, D): the
+	// lifetime that holds a session a contact has to open because none is open.
+	// It is read without mu, since logging never takes the admission's order
+	// (the one order: this, a scope's gate, the live-entry gate, the file), and
+	// only setCurrent writes it, so the two never differ once mu is released.
+	holder atomic.Pointer[string]
+}
+
+// setCurrent makes a lifetime, or with "" nobody, the one the admission holds,
+// and publishes it as holding. The caller holds mu. It is the only place
+// current is written: a failed replacement does not come here, so the lifetime
+// it leaves in place, with its scopes stopped, is still the one published.
+func (a *appAdmission) setCurrent(lifetime string) {
+	a.current = lifetime
+	a.holder.Store(&lifetime)
+}
+
+// holding is the lifetime published as holding, "" when no app is admitted or
+// the one that was has confirmed its exit. It is one observation: the caller's
+// transaction is not ordered with the admission by it, which is why the
+// logging step also checks the file for that lifetime's recorded exit.
+func (a *appAdmission) holding() string {
+	if h := a.holder.Load(); h != nil {
+		return *h
+	}
+	return ""
 }
 
 // read answers the generation and whether the lifetime is current. While the
@@ -214,7 +241,7 @@ func (a *appAdmission) admit(lifetime, instance string, generation uint64) (uint
 	if a.current != "" {
 		a.retire(a.current)
 	}
-	a.current = lifetime
+	a.setCurrent(lifetime)
 	a.generation++
 	a.published.Store(a.generation)
 	for _, sc := range a.scopes {

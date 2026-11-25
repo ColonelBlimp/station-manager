@@ -9,6 +9,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 )
 
 // The operating session's lifecycle (ADR 0100 §3; W-0029 part 2). The record
@@ -110,11 +111,39 @@ func (s *Server) sessionNow() time.Time {
 // the generation, after its commit. A transition that changed nothing, or was
 // rolled back, publishes nothing.
 func (s *Server) publishSessionChange(st sqlite.OperatingSessionState) {
-	if !st.Advanced || s.hub == nil {
+	if st.Advanced {
+		s.publishSessionGeneration(st.Generation)
+	}
+}
+
+// publishSessionGeneration publishes that the served archive's session state
+// is now at a generation. The caller's transaction produced it and has
+// committed. It takes no lock of the admission's: the logging step calls it.
+func (s *Server) publishSessionGeneration(generation int64) {
+	if s.hub == nil {
 		return
 	}
 	s.hub.Publish(events.NameOperatingSessionChanged, events.OperatingSessionChangedPayload{
-		ArchiveID: s.servedArchiveID, Generation: st.Generation,
+		ArchiveID: s.servedArchiveID, Generation: generation,
+	})
+}
+
+// ConnectSessionMembership connects live logging to the operating session
+// (ADR 0100 §2; W-0029 part 5): from here a contact logged while operating
+// joins the open session in its own transaction, a session it has to open is
+// held by the lifetime the admission publishes, and a generation it advances
+// is published as every other advance is.
+//
+// IT IS NOT CALLED BY THE DAEMON'S ORDINARY START (operator ruling 2026-11-24,
+// part 5's question 1). Membership reaches the station with part 6, whose
+// change calls this; until then only tests do, and a contact joins nothing.
+// It is the one place the connection is made: no configuration key and no
+// switch an operator could set.
+func (s *Server) ConnectSessionMembership() {
+	s.qso.SetSessionMembership(&qsoservice.SessionMembership{
+		Holder:   s.admission.holding,
+		Advanced: s.publishSessionGeneration,
+		Now:      s.sessionNow,
 	})
 }
 
@@ -436,7 +465,12 @@ func (s *Server) exitCurrent(ctx context.Context, a *appAdmission, lifetime stri
 		return exitUnavailable(stderr.New("the exit's commit answered " + string(outcome)))
 	}
 	a.retire(lifetime)
-	a.current, a.stopped = "", false
+	// Nobody holds from here, and that is published before the exit's seal on
+	// live entry is released (W-0029 part 5, D1): a contact admitted after the
+	// release opens a session held by nobody, never one for a lifetime that
+	// has gone.
+	a.setCurrent("")
+	a.stopped = false
 	if s.exitSeal != nil {
 		s.exitSeal.Release()
 	}

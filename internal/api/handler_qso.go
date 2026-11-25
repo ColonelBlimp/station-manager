@@ -264,8 +264,8 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	// requireLiveSubmit proved effective — is admitted through the live-entry
 	// gate a default change seals (ADR 0097 §2 step 4); one naming another
 	// logbook is a deliberate operation and is never refused there.
+	live, classified := submitClassifiedLive(r)
 	if s.liveEntry != nil {
-		live, classified := submitClassifiedLive(r)
 		if !classified {
 			s.writeServerError(w, op, errors.New(op).WithMsg("submit served without the default guard"),
 				"submit_failed", "QSO submit failed")
@@ -305,7 +305,15 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 		}
 		defer done()
 	}
-	result, err := s.qso.Submit(r.Context(), logbookID, rec, force)
+	// The same classification decides whether the contact was made while
+	// operating (W-0029 part 5, A1 and B4): a live submission may join the
+	// operating session, and a deliberate one, the default logbook named while
+	// another is asserted included, is stored as before and joins none.
+	submit := s.qso.Submit
+	if live {
+		submit = s.qso.SubmitLive
+	}
+	result, err := submit(r.Context(), logbookID, rec, force)
 	if err != nil {
 		if se := qsoservice.IsSubmitError(err); se != nil {
 			// logbook_not_found is a 404 (the referenced logbook doesn't exist);

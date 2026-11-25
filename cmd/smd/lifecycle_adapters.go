@@ -802,7 +802,12 @@ func (d *daemon) ft8QsoLogger() func(context.Context, ft8.CompletedQso) {
 			// used up the job's deadline, and enrichment never prevents logging.
 			// Without a deadline here the database's own statement and
 			// transaction limits bound the write, as for a Phone / CW submit.
-			res, err := d.qso.Submit(context.WithoutCancel(ctx), q.LogbookID, rec, c.AllowDuplicate)
+			//
+			// A completed exchange is a contact made while operating, whatever
+			// app is or is not running: it may join the operating session
+			// (W-0029 part 5, A2). The step itself leaves a contact outside the
+			// file's default logbook in no session.
+			res, err := d.qso.SubmitLive(context.WithoutCancel(ctx), q.LogbookID, rec, c.AllowDuplicate)
 			if err != nil {
 				d.logger.ErrorWith().Err(err).Str("call", c.TheirCall).
 					Msg("ft8: failed to log completed QSO")

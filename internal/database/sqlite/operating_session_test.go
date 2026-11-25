@@ -345,7 +345,7 @@ func (b *sessBed) logRest(ctx context.Context, tx *sql.Tx, qso int64, holder str
 	if err != nil {
 		return 0, "", fmt.Errorf("the logging step: %w", err)
 	}
-	return qso, joined, nil
+	return qso, joined.SessionID, nil
 }
 
 // stored is whether a QSO and its upload row are in the file.
@@ -960,6 +960,70 @@ func TestOperatingSession_LoggingStep_RunsTheDefaultEpochTest(t *testing.T) {
 	if !reflect.DeepEqual(b.members(joined), []int64{qso}) {
 		t.Fatalf("members = %v", b.members(joined))
 	}
+}
+
+// The step says what its own transaction did (W-0029 part 5, F1): the session
+// joined and, when the transaction advanced the generation, the generation it
+// produced. The caller publishes that after its commit, so it must not be a
+// later read, which could be another writer's.
+func TestOperatingSession_LoggingStep_ReportsTheGenerationItProduced(t *testing.T) {
+	step := func(t *testing.T, b *sessBed, logbook int64, minutes int) SessionJoin {
+		t.Helper()
+		ctx := context.Background()
+		tx, cancel, err := b.svc.BeginTxContext(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		defer cancel()
+		defer func() { _ = tx.Rollback() }()
+		qso, err := b.svc.InsertQsoTx(ctx, tx, b.nextQso(logbook))
+		if err != nil {
+			t.Fatalf("insert the QSO: %v", err)
+		}
+		joined, err := b.svc.JoinOperatingSessionTx(ctx, tx, qso, lifeA, at(minutes))
+		if err != nil {
+			t.Fatalf("the logging step: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		return joined
+	}
+	t.Run("a plain join advances nothing", func(t *testing.T) {
+		b := newSessBed(t, true)
+		st := b.open(lifeA, 0, SessionApplied)
+		got := step(t, b, b.x, 1)
+		if got.SessionID != st.Open.ID || got.Advanced || got.Generation != 0 || b.generation() != int(st.Generation) {
+			t.Fatalf("the step answered %+v with the file at generation %d; want session %s, no advance, generation %d",
+				got, b.generation(), st.Open.ID, st.Generation)
+		}
+	})
+	t.Run("the safety net is one advance, and its generation is the file's", func(t *testing.T) {
+		b := newSessBed(t, true)
+		before := b.generation()
+		got := step(t, b, b.x, 1)
+		if got.SessionID == "" || !got.Advanced || got.Generation != int64(before+1) || b.generation() != before+1 {
+			t.Fatalf("the step answered %+v, from generation %d to %d; want an advance to %d", got, before, b.generation(), before+1)
+		}
+	})
+	t.Run("an epoch close and an open are one advance", func(t *testing.T) {
+		b := newSessBed(t, true)
+		b.open(lifeA, 0, SessionApplied)
+		b.log(b.x, lifeA, 1)
+		b.setDefault(b.y)
+		before := b.generation()
+		got := step(t, b, b.y, 10)
+		if got.SessionID == "" || !got.Advanced || got.Generation != int64(before+1) || b.generation() != before+1 {
+			t.Fatalf("the step answered %+v, from generation %d to %d; want one advance to %d", got, before, b.generation(), before+1)
+		}
+	})
+	t.Run("a QSO outside the default logbook joins nothing and advances nothing", func(t *testing.T) {
+		b := newSessBed(t, true)
+		before := b.generation()
+		if got := step(t, b, b.y, 1); got != (SessionJoin{}) || b.generation() != before {
+			t.Fatalf("the step answered %+v, generation %d to %d; want nothing", got, before, b.generation())
+		}
+	})
 }
 
 func TestOperatingSession_LoggingStep_RollsBackWithItsQSO(t *testing.T) {

@@ -37,23 +37,56 @@ const dedupeRefetchTimeout = 2 * time.Second
 const cacheWarmTimeout = 2 * time.Second
 
 // Submit validates an ADIF record, checks for duplicates, and atomically
-// stores the QSO and its upload-queue rows. It is the PUBLIC entry point
-// (POST /v1/qso): it always mints a fresh UUIDv7 and never honours a
-// caller-supplied APP_SM_QSO_ID, so a client cannot choose a QSO's canonical
-// identity (identity-spoofing guard — review 2026-06-04 H1).
+// stores the QSO and its upload-queue rows. It and SubmitLive are the PUBLIC
+// entry points (POST /v1/qso): each always mints a fresh UUIDv7 and never
+// honours a caller-supplied APP_SM_QSO_ID, so a client cannot choose a QSO's
+// canonical identity (identity-spoofing guard — review 2026-06-04 H1).
+//
+// Submit is the DELIBERATE submit: one the default guard did not classify as
+// live (POST /v1/qso naming a logbook the page does not assert as its
+// default). It stores exactly as SubmitLive does and joins no operating
+// session (W-0029 part 5, B4).
 //
 // If force is true, the dedupe check is skipped (contest edge case per
 // api.md Section 4.2).
 func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, force bool) (SubmitResult, error) {
-	// Stamp the derived MY_RIG for live logging (config.md §10): the active rig's
-	// per-rig override, else its rigdef Name. Authoritative — clients no longer
-	// set MY_RIG, and the single injection point covers both the phone/CW handler
-	// and the FT8 e4 sink. SubmitImport deliberately does NOT stamp (it preserves
-	// an imported QSO's own MY_RIG). Config is required (Initialize enforces it)
-	// and submit() dereferences it unconditionally, so there's no nil-guard here.
-	rec.MyRig = s.stampedMyRig(s.Config.Snapshot())
-	return s.submit(ctx, logbookID, rec, force, false, nil)
+	return s.submit(ctx, logbookID, s.stampMyRig(rec), force, submitDeliberate, nil)
 }
+
+// SubmitLive is the submit of a contact made while operating: a Phone/CW
+// submit the default guard classified as live, or an FT8 completed exchange.
+// It is Submit, and once the membership is connected (SetSessionMembership)
+// the contact also joins the open operating session, in its own transaction
+// (ADR 0100 §2; W-0029 part 5, A). No session state refuses the contact; a
+// database failure in that step rolls the contact back like any other.
+func (s *Service) SubmitLive(ctx context.Context, logbookID int64, rec adif.Record, force bool) (SubmitResult, error) {
+	return s.submit(ctx, logbookID, s.stampMyRig(rec), force, submitOperating, nil)
+}
+
+// stampMyRig stamps the derived MY_RIG on a record that is logged now
+// (config.md §10): the active rig's per-rig override, else its rigdef Name.
+// Authoritative — clients no longer set MY_RIG, and the one helper covers the
+// phone/CW handler and the FT8 e4 sink. SubmitImport deliberately does NOT
+// stamp (it preserves an imported QSO's own MY_RIG). Config is required
+// (Initialize enforces it) and submit() dereferences it unconditionally, so
+// there's no nil-guard here.
+func (s *Service) stampMyRig(rec adif.Record) adif.Record {
+	rec.MyRig = s.stampedMyRig(s.Config.Snapshot())
+	return rec
+}
+
+// submitMode is the entry point a submit came through.
+type submitMode int
+
+const (
+	// submitDeliberate is Submit: stored as a contact logged now, in no session.
+	submitDeliberate submitMode = iota
+	// submitOperating is SubmitLive: a contact made while operating.
+	submitOperating
+	// submitImport is SubmitImport and the batch import's record-by-record
+	// fallback: the trusted import path.
+	submitImport
+)
 
 // stampedMyRig is the MY_RIG a live submit stamps (config.md §10). Pinned to the
 // rig the bridge actually connected to at startup, not the live default_rig_id —
@@ -106,7 +139,7 @@ func (s *Service) SubmitImport(ctx context.Context, logbookID int64, rec adif.Re
 	if err := refuseBulkBackfillImport(forwardTo, s.routesFor(logbookID)); err != nil {
 		return SubmitResult{}, err
 	}
-	return s.submit(ctx, logbookID, rec, force, true, forwardTo)
+	return s.submit(ctx, logbookID, rec, force, submitImport, forwardTo)
 }
 
 // resolveSubmitUUID applies the UUID policy (ADR 0016; review 2026-06-04 H1):
@@ -343,15 +376,17 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	return qso, dedupeKey, nil
 }
 
-// submit is the shared implementation. isImport marks the trusted import/restore
+// submit is the shared implementation. submitImport marks the trusted import/restore
 // path (SubmitImport) and drives every divergence from a live/public submit:
 // it preserves a valid supplied UUIDv7 (vs. always minting), relaxes the
 // logbook-callsign match (a historical/mixed log may carry a different
 // callsign), and enqueues upload rows only for forwarders named in forwardTo
 // (default none) — importing a historical logbook must never auto-upload
 // (retrospective backfill is operator-driven, never automatic; ADR 0022).
-func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, isImport bool, forwardTo []string) (SubmitResult, error) {
+// submitOperating differs from submitDeliberate in one thing: the logging step.
+func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force bool, mode submitMode, forwardTo []string) (SubmitResult, error) {
 	const op errors.Op = "qsoservice.Submit"
+	isImport := mode == submitImport
 
 	// Logbook must exist; the callsign-match check (live submits only) lives in
 	// prepareQso, which takes the callsign as a param. Looked up once here per
@@ -501,32 +536,19 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		forwardedTo = append(forwardedTo, fwd.Name)
 	}
 
+	// The logging step, last in the transaction (ADR 0100 §2; W-0029 part 5,
+	// C1): the QSO's row has held the writer's position since its insert.
+	sessionChanged, err := s.joinSession(ctx, tx, qsoID, mode)
+	if err != nil {
+		s.rollbackTx(tx, op)
+		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to put the QSO into the operating session")
+	}
+
 	if err = tx.Commit(); err != nil {
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to commit transaction")
 	}
 
-	// forced records the deliberate dedupe bypass (force skips the duplicate check
-	// entirely — a core storage invariant), and source distinguishes a live QSO from an
-	// import; neither is otherwise recoverable (the access log drops RawQuery, a
-	// credential-leak defence). Feeds the FT8 deliberate-vs-accidental duplicate item (Q9).
-	source := "live"
-	if isImport {
-		source = "import"
-	}
-	s.Logger.InfoWith().
-		Int64("qso_id", qsoID).
-		Str("uuid", qso.UUID).
-		Int64("logbook_id", logbookID).
-		Str("call", call).
-		Str("qso_date", qso.QsoDetails.QsoDate).
-		Str("time_on", qso.QsoDetails.TimeOn).
-		Str("freq_mhz", qso.QsoDetails.Freq).
-		Str("band", qso.QsoDetails.Band).
-		Str("mode", qso.QsoDetails.Mode).
-		Strs("forwarded_to", forwardedTo).
-		Bool("forced", force).
-		Str("source", source).
-		Msg("QSO stored")
+	s.logStored(qsoID, qso, forwardedTo, force, isImport)
 
 	s.Hub.Publish(events.NameQsoStored, events.QsoStoredPayload{
 		QsoUUID:   qso.UUID,
@@ -534,6 +556,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		LogbookID: logbookID,
 	})
 	s.notifyCommitted()
+	sessionChanged()
 
 	// Best-effort contacted_station upsert — the second write path
 	// per ADR 0017 #10. Outside the QSO transaction (cache writes
@@ -564,6 +587,33 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	return SubmitResult{Status: "stored", UUID: qso.UUID, ID: qsoID}, nil
+}
+
+// logStored is the "QSO stored" line of a committed submit. forced records the
+// deliberate dedupe bypass (force skips the duplicate check entirely — a core
+// storage invariant), and source distinguishes a live QSO from an import;
+// neither is otherwise recoverable (the access log drops RawQuery, a
+// credential-leak defence). Feeds the FT8 deliberate-vs-accidental duplicate
+// item (Q9). forwardedTo is non-nil, so an empty fan-out logs an explicit [].
+func (s *Service) logStored(qsoID int64, qso types.Qso, forwardedTo []string, force, isImport bool) {
+	source := "live"
+	if isImport {
+		source = "import"
+	}
+	s.Logger.InfoWith().
+		Int64("qso_id", qsoID).
+		Str("uuid", qso.UUID).
+		Int64("logbook_id", qso.LogbookID).
+		Str("call", qso.ContactedStation.Call).
+		Str("qso_date", qso.QsoDetails.QsoDate).
+		Str("time_on", qso.QsoDetails.TimeOn).
+		Str("freq_mhz", qso.QsoDetails.Freq).
+		Str("band", qso.QsoDetails.Band).
+		Str("mode", qso.QsoDetails.Mode).
+		Strs("forwarded_to", forwardedTo).
+		Bool("forced", force).
+		Str("source", source).
+		Msg("QSO stored")
 }
 
 // (isUniqueConstraintError moved to sqlite.IsUniqueConstraintError —
