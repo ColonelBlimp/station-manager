@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -39,11 +41,44 @@ func (b *sessBed) memberRead(uuid string) SessionMember {
 
 func (b *sessBed) closedRead(limit int) ClosedSessions {
 	b.t.Helper()
-	got, err := b.svc.ClosedOperatingSessionsWithContext(context.Background(), limit)
+	return b.closedPage(limit, nil)
+}
+
+// closedPage is the list's first page, or with after the page that follows
+// that session.
+func (b *sessBed) closedPage(limit int, after *ClosedSessionsAfter) ClosedSessions {
+	b.t.Helper()
+	got, err := b.svc.ClosedOperatingSessionsWithContext(context.Background(), limit, after)
 	if err != nil {
 		b.t.Fatalf("read the closed sessions: %v", err)
 	}
 	return got
+}
+
+// closedDirectly writes closed sessions of a logbook straight into the file,
+// each with one confirmed sitting from its start, and returns nothing: the
+// session generation is not moved. It is for histories too long to make one
+// control at a time, and for a session of a logbook that is not the default.
+func (b *sessBed) closedDirectly(logbook string, starts map[string]int) {
+	b.t.Helper()
+	tx, err := b.svc.handle.Begin()
+	if err != nil {
+		b.t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for id, start := range starts {
+		if _, err := tx.Exec(`INSERT INTO operating_session (id, logbook_uuid, default_epoch, opened_at, closed_at, close_reason)
+			VALUES (?, ?, 1, ?, ?, ?)`, id, logbook, at(start), at(start+1), SessionClosedByNew); err != nil {
+			b.t.Fatalf("insert session %s: %v", id, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO operating_session_interval (session_id, seq, started_at, ended_at, end_state)
+			VALUES (?, 1, ?, ?, 'confirmed')`, id, at(start), at(start+1)); err != nil {
+			b.t.Fatalf("insert the sitting of %s: %v", id, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		b.t.Fatalf("commit: %v", err)
+	}
 }
 
 func (b *sessBed) uuidOf(qso int64) string {
@@ -403,4 +438,157 @@ func TestClosedSessions_AreTheDefaultLogbooksOnly(t *testing.T) {
 	if got := none.closedRead(20); len(got.Sessions) != 0 || got.DefaultLogbookUUID != "" || got.More {
 		t.Fatalf("with no default logbook the list is %+v", got)
 	}
+}
+
+// "Show more" reaches every closed session, however many there are (operator
+// ruling 2026-11-25, question 3: the first 20, and the rest on asking). A page
+// is bounded, so the rest is reached by asking for what follows the last
+// session shown, in the list's own order. 1,001 sessions, more than the
+// largest page, with starts that tie in tens: each page size reaches all of
+// them, each exactly once, in the order the whole list has, and then says
+// there are no more.
+func TestClosedSessions_ShowMoreReachesEverySessionExactlyOnce(t *testing.T) {
+	b := newSessBed(t, true)
+	const n = 1001
+	starts := make(map[string]int, n)
+	var want []string
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("0190%04d-0000-7000-8000-000000000000", i)
+		starts[id] = i % 97 // ties, and an order the ids do not have
+		want = append(want, id)
+	}
+	b.closedDirectly(b.xUUID, starts)
+	sort.Slice(want, func(i, j int) bool {
+		if starts[want[i]] != starts[want[j]] {
+			return starts[want[i]] > starts[want[j]]
+		}
+		return want[i] > want[j]
+	})
+
+	for _, size := range []int{1000, 20} {
+		seen := make(map[string]bool, n)
+		var got []string
+		var after *ClosedSessionsAfter
+		for {
+			page := b.closedPage(size, after)
+			if page.Stale {
+				t.Fatalf("pages of %d: a further page of a list that has not changed read as stale", size)
+			}
+			for _, s := range page.Sessions {
+				if seen[s.ID] {
+					t.Fatalf("pages of %d: session %s was listed twice, after %d others: Show more began again instead of going on", size, s.ID, len(got))
+				}
+				seen[s.ID] = true
+				got = append(got, s.ID)
+			}
+			if !page.More {
+				break
+			}
+			if len(page.Sessions) != size {
+				t.Fatalf("pages of %d: a page of %d says there are more", size, len(page.Sessions))
+			}
+			after = &ClosedSessionsAfter{Generation: page.Generation, SessionID: page.Sessions[size-1].ID}
+		}
+		if len(got) != n {
+			t.Fatalf("pages of %d reached %d of the %d sessions before saying there were no more", size, len(got), n)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("pages of %d list the sessions in another order than the whole list has", size)
+		}
+	}
+}
+
+// A further page is of the list its first page was of. When the session's
+// record has moved on since (a session closed or continued: the generation),
+// or the session named is not in the list (it is open again, it is of another
+// logbook, the file does not hold it), the page is stale: no sessions, and the
+// caller reads the list again from its start. It is never a page of a
+// different list joined to the first.
+func TestClosedSessions_AFurtherPageOfAListThatHasChangedIsStale(t *testing.T) {
+	b := newClosedBed(t) // the list is S3, S2, S1; S4 is open
+	const elsewhere = "01900000-0000-7000-8000-00000000ffff"
+	b.closedDirectly(b.yUUID, map[string]int{elsewhere: 45})
+	now := b.st.Generation
+
+	if page := b.closedPage(1, &ClosedSessionsAfter{Generation: now, SessionID: b.s3}); page.Stale || len(page.Sessions) != 1 || page.Sessions[0].ID != b.s2 || !page.More {
+		t.Fatalf("the page after S3 = %+v; want S2 with more to come: the list has not changed", page)
+	}
+	for name, after := range map[string]ClosedSessionsAfter{
+		"a session the file does not hold": {now, "01900000-0000-7000-8000-00000000eeee"},
+		"the session that is open":         {now, b.s4},
+		"a session of another logbook":     {now, elsewhere},
+		"an earlier generation":            {now - 1, b.s3},
+		"a later generation":               {now + 1, b.s3},
+	} {
+		page := b.closedPage(20, &after)
+		if !page.Stale || len(page.Sessions) != 0 || page.More || page.Generation != now {
+			t.Errorf("the page after %s = %+v; want it stale, with no sessions, at generation %d", name, page, now)
+		}
+	}
+
+	next := b.continueSession(lifeC, now, b.s2, 60, SessionApplied) // S2 is open again: the list is S3, S1
+	if page := b.closedPage(20, &ClosedSessionsAfter{Generation: now, SessionID: b.s3}); !page.Stale || len(page.Sessions) != 0 || page.Generation != next.Generation {
+		t.Fatalf("after a Continue, the page after S3 at the generation before it = %+v; want it stale at generation %d", page, next.Generation)
+	}
+	if page := b.closedPage(20, &ClosedSessionsAfter{Generation: next.Generation, SessionID: b.s3}); page.Stale || len(page.Sessions) != 1 || page.Sessions[0].ID != b.s1 {
+		t.Fatalf("read again, the page after S3 = %+v; want S1", page)
+	}
+}
+
+// A file with no default logbook has an empty list, and a first page of it is
+// that. A further page cannot be of an empty list: it is stale, whatever
+// generation it names, and is never answered as "the end of the history".
+func TestClosedSessions_AFurtherPageWithNoDefaultLogbookIsStale(t *testing.T) {
+	b := newSessBed(t, false)
+
+	first := b.closedPage(20, nil)
+	if first.Stale || first.DefaultLogbookUUID != "" || len(first.Sessions) != 0 || first.More {
+		t.Fatalf("the first page with no default logbook = %+v; want an empty list", first)
+	}
+	for _, generation := range []int64{first.Generation, first.Generation + 10} {
+		page := b.closedPage(20, &ClosedSessionsAfter{Generation: generation, SessionID: "01900000-0000-7000-8000-00000000eeee"})
+		if !page.Stale || len(page.Sessions) != 0 || page.More {
+			t.Errorf("a further page at generation %d with no default logbook = %+v; want it stale", generation, page)
+		}
+	}
+}
+
+// A closed session whose sitting cannot be read fails the list. It is not left
+// out: a list without it would be read as the whole history, and one with only
+// it as "nothing to continue". A file with no closed session is a different
+// thing, and reads as an empty list.
+func TestClosedSessions_ASessionWhoseSittingCannotBeReadFailsTheList(t *testing.T) {
+	read := func(b *sessBed, limit int) (ClosedSessions, error) {
+		return b.svc.ClosedOperatingSessionsWithContext(context.Background(), limit, nil)
+	}
+	t.Run("the only closed session", func(t *testing.T) {
+		b := newSessBed(t, true)
+		if got, err := read(b, 20); err != nil || len(got.Sessions) != 0 || got.More {
+			t.Fatalf("a file with no closed session read as %+v, %v; want an empty list", got, err)
+		}
+		st := b.open(lifeA, 0, SessionApplied)
+		b.log(b.x, lifeA, 1)
+		b.newSession(lifeA, st.Generation, 2, SessionApplied)
+		if got, err := read(b, 20); err != nil || len(got.Sessions) != 1 {
+			t.Fatalf("the fixture: the closed session read as %+v, %v", got, err)
+		}
+		execT(t, b.svc, `DELETE FROM operating_session_interval WHERE session_id = ?`, st.Open.ID)
+
+		if got, err := read(b, 20); err == nil {
+			t.Fatalf("a closed session with no sitting read as %+v; want the read to fail, not an empty history", got)
+		}
+	})
+	t.Run("the last of several, beyond the page", func(t *testing.T) {
+		b := newClosedBed(t)
+		execT(t, b.svc, `DELETE FROM operating_session_interval WHERE session_id = ?`, b.s1)
+
+		for _, limit := range []int{20, 1} {
+			if got, err := read(b.sessBed, limit); err == nil {
+				t.Fatalf("limit %d: with one session's sittings gone the list read as %+v; want the read to fail", limit, got)
+			}
+		}
+		if got, err := b.svc.ClosedOperatingSessionsWithContext(context.Background(), 20, &ClosedSessionsAfter{Generation: b.st.Generation, SessionID: b.s3}); err == nil {
+			t.Fatalf("a further page read as %+v; want the read to fail", got)
+		}
+	})
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -165,25 +166,68 @@ func (s *Server) handleOperatingSessionMember(w http.ResponseWriter, r *http.Req
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
-// handleOperatingSessionClosed answers Continue's list: the closed sessions of
-// the default logbook, by the start of each one's latest sitting, the most
-// recent first. Whether one of them can still be continued is decided again,
-// in the transaction, when it is chosen (POST /v1/operating-session/continue).
-func (s *Server) handleOperatingSessionClosed(w http.ResponseWriter, r *http.Request) {
-	const op errors.Op = "api.handleOperatingSessionClosed"
-	limit := closedSessionsDefaultLimit
-	if values, asked := r.URL.Query()["limit"]; asked {
+// closedSessionsPage reads which page of Continue's list a request asks for.
+// refusal is "" for a request that can be answered.
+//
+// A page is bounded (limit), so the rest of a long history is reached by a
+// further page: after names the last session of the page before it and
+// generation that page's generation, both or neither.
+func closedSessionsPage(q url.Values) (limit int, after *sqlite.ClosedSessionsAfter, refusal string) {
+	limit = closedSessionsDefaultLimit
+	if values, asked := q["limit"]; asked {
 		n, err := strconv.Atoi(values[0])
 		if len(values) != 1 || err != nil || n < 1 || n > closedSessionsMaxLimit {
-			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-				"limit must be one whole number from 1 to "+strconv.Itoa(closedSessionsMaxLimit), op)
-			return
+			return 0, nil, "limit must be one whole number from 1 to " + strconv.Itoa(closedSessionsMaxLimit)
 		}
 		limit = n
 	}
-	got, err := s.db.ClosedOperatingSessionsWithContext(r.Context(), limit)
+	sessions, generations := q["after"], q["generation"]
+	if len(sessions) == 0 && len(generations) == 0 {
+		return limit, nil, ""
+	}
+	const both = "a further page names the session it follows (after) and that page's generation, each once"
+	if len(sessions) != 1 || len(generations) != 1 || sessions[0] == "" {
+		return 0, nil, both
+	}
+	generation, err := strconv.ParseInt(generations[0], 10, 64)
+	if err != nil || generation < 0 {
+		return 0, nil, both
+	}
+	return limit, &sqlite.ClosedSessionsAfter{Generation: generation, SessionID: sessions[0]}, ""
+}
+
+// handleOperatingSessionClosed answers a page of Continue's list: the closed
+// sessions of the default logbook, by the start of each one's latest sitting,
+// the most recent first. Whether one of them can still be continued is decided
+// again, in the transaction, when it is chosen (POST
+// /v1/operating-session/continue).
+//
+// A further page of a list that has changed since the page it follows is
+// refused as stale: the caller reads the list again from its start, and never
+// shows pages of two different lists as one.
+func (s *Server) handleOperatingSessionClosed(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleOperatingSessionClosed"
+	// The query is parsed strictly: URL.Query() drops a pair it cannot parse
+	// (an unescaped ';', a bad %-escape), and a further page that lost its
+	// pairs would be answered, with 200, as the first page again.
+	query, qerr := url.ParseQuery(r.URL.RawQuery)
+	if qerr != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_query_param", "the query string could not be parsed", op)
+		return
+	}
+	limit, after, refusal := closedSessionsPage(query)
+	if refusal != "" {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", refusal, op)
+		return
+	}
+	got, err := s.db.ClosedOperatingSessionsWithContext(r.Context(), limit, after)
 	if err != nil {
 		s.sessionReadFailed(w, op, "the closed operating sessions", err)
+		return
+	}
+	if got.Stale {
+		s.writeError(w, http.StatusConflict, operatingSessionStale,
+			"the list of closed sessions has changed since the page this one follows; read it again from its start", op)
 		return
 	}
 	resp := closedSessionsResponse{ArchiveID: s.servedArchiveID, Generation: got.Generation,

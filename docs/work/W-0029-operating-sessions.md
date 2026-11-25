@@ -5211,8 +5211,10 @@ added and the daemon does not have.
    and the worked mark set once, for the archive the frame names.
 
 **B. Never an older, a foreign or an overwritten list.**
-1. The daemon answers the rows with their archive, their session's id and its generation,
-   all read in one snapshot of the file.
+1. The daemon answers the rows with their archive, their session's id and its generation.
+   The session's id, the generation and the rows are read in one snapshot of the file. The
+   archive's id is the one the daemon verified for the file it serves when it started
+   (worded after codex-268 and codex-269: it was "all read in one snapshot").
 2. An answer, of the list or of one contact, is drawn only if the page was bound to that
    archive when the read was sent, and is still bound to it and showing that session at
    that generation when the answer arrives. Anything else is dropped and the page reads
@@ -5229,6 +5231,12 @@ added and the daemon does not have.
    answer released last:
    - the contact is deleted and leaves the panel: the row does not return;
    - the contact is edited twice: the panel keeps the second edit.
+
+   The contact's edit counter settles the second of these and not the first (added after
+   Codex's review of slice 1, codex-268): "not a member" has no counter. So the page also
+   keeps to the read it sent last for a contact. A read sent after an event sees that
+   event's change, whenever it is answered; an answer to an earlier read of the same
+   contact is dropped once a later one has been sent.
 5. After New, Continue, a default change or an archive switch seen by event, the panel is
    the new session's: no row of the session before it stays, even for a moment after the
    new state is drawn. An answer to the in-place edit that returns after the session has
@@ -5244,6 +5252,20 @@ added and the daemon does not have.
    proven.** An event that arrives while the page is still confirming which archive a
    reconnected daemon serves changes nothing in the panel: it cannot remove or alter a row
    of the archive on screen that happens to share its UUID.
+
+10. **The panel built from events has the order a reload shows** (added after codex-268).
+   Two contacts are stored, A then B, and the answer about B arrives first: the panel ends
+   with B above A, as the list read orders them (the newest stored first), not in the order
+   the answers arrived. Shown by comparing the panel built from the events with the panel
+   after a reload, with the answers released in each order. The single-contact answer
+   carries nothing to place a row by, so the build places an added contact from a read of
+   the ordered list (one read for a burst of additions), not by putting each arrival on
+   top.
+   **And a contact stored while that read is out is not lost to it** (added after
+   codex-269): the read of the ordered list for A has taken its snapshot and is held; B is
+   stored and its event arrives; the held answer is released, with no further event and no
+   reload. The panel reaches B above A. So a change that arrives while a read of the list
+   is out is followed by one more read, for all the changes that arrived during it.
 
 Overlapping reads of the list are made as one, and only the session shown is read: that is
 for the build, and is said here so that B3's "read again" is not taken to mean a read for
@@ -5294,6 +5316,12 @@ every event.
    start of each one's latest sitting, the most recent first, with the session's id deciding
    between equal starts. The current session is not in it. With none to offer the control is
    not shown.
+   **"Show more" reaches every closed session** (added after codex-268), each once and in
+   that order, however many there are, and is not offered once the last is shown. If the
+   session's record has changed between two pages (a session closed or continued, another
+   default logbook, another archive) the list is read again from its start: pages of two
+   different lists are never shown as one. A history that cannot be read is said to be
+   unreadable; it is not shown as shorter than it is, or as "nothing to continue".
 2. Each line gives the session's dates and its count of contacts that are not deleted, and
    says so when the end of any of its sittings was not confirmed, the last one or an earlier
    one. No end time is made up for a sitting that has none.
@@ -5517,3 +5545,58 @@ as well as by the record, and is still written in exactly one statement in the w
 
 **Not built.** The cutover (the page's readers, the clock, the connection, the desktop
 scenarios) and the controls. Nothing in the app calls any of this yet.
+
+### Part 6, slice 1 corrected after Codex's review (codex-268; 2026-11-25; uncommitted when written)
+
+Codex reviewed the committed slice (`5d1ea712`) and found two defects in the read of closed
+sessions and one gap in what a contact's answer can settle. All three stand.
+
+1. **"Show more" stopped at 1,000.** The route took a limit of at most 1,000 and every
+   request began at the newest session, so with more closed sessions than that the oldest
+   could not be reached by any request. Ruling 3 gives the operator the first 20 and the
+   rest on asking. **Corrected:** a page is still bounded, and a further page is asked for
+   with the last session of the page before it and that page's generation
+   (`?after=&generation=`). It answers what follows that session in the list's order, by
+   comparing the stored values, so the next page begins exactly where the last ended. A
+   further page of a list that has changed (the generation moved, or the session named is
+   no longer in the list: open again, of another logbook, not in the file) is refused,
+   `409 operating_session_stale`, and the caller starts again. *Shown:* 1,001 closed
+   sessions with starts that tie in tens, read in pages of 1,000 and of 20: every session
+   once, in the whole list's order, ending with no more; the stale cases one by one; at the
+   route, five sessions in pages of two.
+2. **A closed session with no sitting vanished from the list.** The list joined each session
+   to its latest sitting, and a session without one was left out; a history of only that
+   session read as empty. The record never makes such a session, and the schema does not
+   forbid one. **Corrected:** each page first looks for one among the closed sessions of
+   the logbook, and the read fails (503) if there is one, on every page and whatever the
+   limit. *Shown:* with the only closed session damaged (against a file that has none, which
+   reads as an empty list), and with the damaged one last of several and beyond the page
+   asked for.
+3. **A contact's edit counter does not settle every order of two answers.** Two cases, both
+   for the cutover (slice 2), where the page's readers are built: "not a member" has no
+   counter, so a held answer with the row, released after the delete's answer, would bring
+   the row back; and two contacts whose answers arrive in the other order would be stacked
+   in arrival order, not the list's. Criteria B4 and the new B10 above say what must be
+   seen. No change to the daemon: the page keeps to the read it sent last for a contact,
+   and places additions from the ordered list.
+
+**Two request cases Codex found in the correction itself (codex-269), both corrected.**
+- *A further page with no default logbook was answered 200, as the end of the history.* The
+  read returned its empty list before it looked at the continuation. A first page of an
+  archive with no default logbook is an empty list; a further page cannot be of an empty
+  list, and is now stale (409) whatever generation it names. *Shown* at the storage, with
+  both requests against one file.
+- *A continuation the server could not parse was answered as the first page.* A query with
+  an unescaped `;`, or a bad escape, lost its pairs in the lenient parse, and what was left
+  asked for page one: "Show more" would have been given, with 200, the sessions already
+  shown. The route now parses the query strictly, as the QSO submit does, and refuses it
+  (400 `invalid_query_param`). *Shown* at the route with a history that is not empty.
+
+**One thing this opens for slice 2, not decided:** if the page reads the ordered list for
+every addition, the read of a single contact may have no caller left but an edit's and a
+delete's. Whether the route stays is settled when the readers are built; a route nothing
+calls is not kept.
+
+**Not changed:** one damaged session makes the whole list unreadable, not only its own line.
+That is the simple, honest answer for a state that has not been seen; a list that showed
+the others and said one was missing would be more to build for it.

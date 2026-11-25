@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"reflect"
 	"testing"
 )
 
@@ -209,6 +211,125 @@ func TestSessionPanel_TheClosedSessionsRead(t *testing.T) {
 		if status, body, _ := b.appDo(t, b.c, lifeA, http.MethodGet, "/v1/operating-session/closed?limit="+bad, ""); status != http.StatusBadRequest {
 			t.Fatalf("limit=%s answered %d %s; want 400", bad, status, body)
 		}
+	}
+}
+
+// "Show more": a further page is what follows the last session shown, named
+// with the generation of the page it came from. Five closed sessions in pages
+// of two are reached each once, in the order the whole list has, and the last
+// page says there are no more. A further page of a list that has changed since is
+// refused as stale, never joined to the pages before it.
+func TestSessionPanel_ShowMoreGoesOnFromTheLastSessionShown(t *testing.T) {
+	b := newMemberBed(t, true)
+	b.mustBeAdmitted(lifeA)
+	closed := map[string]bool{}
+	for i := 0; i < 5; i++ {
+		v := b.view(lifeA)
+		b.live(lifeA)
+		if a := b.newAs(lifeA, v.Generation); a.status != http.StatusOK {
+			t.Fatalf("New %d: %+v", i, a)
+		}
+		closed[v.Session.ID] = true
+	}
+	var whole closedView
+	if status := b.read(lifeA, "/v1/operating-session/closed", &whole); status != http.StatusOK || whole.Sessions == nil || len(*whole.Sessions) != 5 {
+		t.Fatalf("the fixture: the whole list is %+v (status %d)", whole, status)
+	}
+	var want []string
+	for _, s := range *whole.Sessions {
+		if !closed[s.ID] {
+			t.Fatalf("the fixture: the whole list holds %s, which no New closed", s.ID)
+		}
+		want = append(want, s.ID)
+	}
+
+	var got []string
+	path := "/v1/operating-session/closed?limit=2"
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatalf("Show more never came to an end; it has listed %v", got)
+		}
+		var page closedView
+		if status := b.read(lifeA, path, &page); status != http.StatusOK || page.Sessions == nil || page.More == nil {
+			t.Fatalf("GET %s answered %d %+v", path, status, page)
+		}
+		for _, s := range *page.Sessions {
+			got = append(got, s.ID)
+		}
+		if !*page.More {
+			break
+		}
+		last := (*page.Sessions)[len(*page.Sessions)-1].ID
+		path = fmt.Sprintf("/v1/operating-session/closed?limit=2&after=%s&generation=%d", last, page.Generation)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Show more listed %v; want each closed session once, in the whole list's order: %v", got, want)
+	}
+
+	// The list changes: a further page of the list as it was is stale.
+	second := want[1]
+	was := whole.Generation
+	b.live(lifeA)
+	if a := b.newAs(lifeA, b.view(lifeA).Generation); a.status != http.StatusOK {
+		t.Fatalf("the sixth New: %+v", a)
+	}
+	for name, query := range map[string]string{
+		"of the list before a session closed": fmt.Sprintf("after=%s&generation=%d", second, was),
+		"after a session that is not listed":  fmt.Sprintf("after=%s&generation=%d", "01900000-0000-7000-8000-00000000eeee", b.view(lifeA).Generation),
+	} {
+		status, body, _ := b.appDo(t, b.c, lifeA, http.MethodGet, "/v1/operating-session/closed?"+query, "")
+		if status != http.StatusConflict || errorCode(t, body) != operatingSessionStale {
+			t.Errorf("a further page %s answered %d %s; want 409 %s", name, status, body, operatingSessionStale)
+		}
+	}
+
+	// A further page names both the session it follows and that page's
+	// generation, each once and well formed.
+	for _, bad := range []string{
+		"after=" + second,
+		"generation=3",
+		"after=&generation=3",
+		"after=" + second + "&generation=",
+		"after=" + second + "&generation=soon",
+		"after=" + second + "&generation=-1",
+		"after=" + second + "&generation=3&generation=3",
+		"after=" + second + "&after=" + second + "&generation=3",
+	} {
+		if status, body, _ := b.appDo(t, b.c, lifeA, http.MethodGet, "/v1/operating-session/closed?"+bad, ""); status != http.StatusBadRequest || errorCode(t, body) != "invalid_field_value" {
+			t.Errorf("GET closed?%s answered %d %s; want 400 invalid_field_value", bad, status, body)
+		}
+	}
+
+	// A query that cannot be parsed is refused. Read leniently, its pairs are
+	// dropped and what is left is a request for the first page: a "Show more"
+	// would be answered, with 200, by the sessions already shown.
+	for _, bad := range []string{
+		fmt.Sprintf("after=%s;generation=%d", second, b.view(lifeA).Generation),
+		"limit=2;after=" + second,
+		"after=%zz&generation=3",
+	} {
+		if status, body, _ := b.appDo(t, b.c, lifeA, http.MethodGet, "/v1/operating-session/closed?"+bad, ""); status != http.StatusBadRequest || errorCode(t, body) != "invalid_query_param" {
+			t.Errorf("GET closed?%s answered %d %s; want 400 invalid_query_param", bad, status, body)
+		}
+	}
+}
+
+// A closed session whose sitting cannot be read is not left out of Continue's
+// list, and a history of only that session is not answered as empty: the read
+// is the documented 503.
+func TestSessionPanel_AClosedSessionThatCannotBeReadFailsTheList(t *testing.T) {
+	b := newMemberBed(t, true)
+	b.mustBeAdmitted(lifeA)
+	v := b.view(lifeA)
+	b.live(lifeA)
+	if a := b.newAs(lifeA, v.Generation); a.status != http.StatusOK {
+		t.Fatalf("New: %+v", a)
+	}
+	b.exec(`DELETE FROM operating_session_interval WHERE session_id = ?`, v.Session.ID)
+
+	status, body, _ := b.appDo(t, b.c, lifeA, http.MethodGet, "/v1/operating-session/closed", "")
+	if status != http.StatusServiceUnavailable || errorCode(t, body) != operatingSessionUnavailable {
+		t.Fatalf("the list with a closed session that has no sitting answered %d %s; want 503 %s", status, body, operatingSessionUnavailable)
 	}
 }
 

@@ -76,8 +76,12 @@ type ClosedSessions struct {
 	// default logbook; then the list is empty.
 	DefaultLogbookUUID string
 	Sessions           []ClosedSession
-	// More is whether closed sessions beyond the limit exist.
+	// More is whether closed sessions beyond this page exist.
 	More bool
+	// Stale is set for a further page (ClosedSessionsAfter) of a list that is
+	// no longer the one its first page was of. Then Sessions is empty and the
+	// caller reads the list again from its start.
+	Stale bool
 }
 
 // sessionReadGap is a test-only seam, nil in production: it runs inside each of
@@ -200,29 +204,100 @@ func (s *Service) OperatingSessionMemberWithContext(ctx context.Context, uuid st
 	return out, nil
 }
 
-// closedSessionsSQL is Continue's list (ADR 0100 §8): the closed sessions
-// bound to a logbook, by the start of each one's latest sitting, the most
-// recent first, the later id first among equal starts. A session always has a
-// sitting, so the inner join drops none.
-const closedSessionsSQL = `SELECT s.id, s.logbook_uuid, s.opened_at, i.started_at, i.ended_at,
-		EXISTS (SELECT 1 FROM operating_session_interval u WHERE u.session_id = s.id AND u.end_state = 'unconfirmed'),
-		(SELECT COUNT(*) FROM operating_session_member m JOIN qso q ON q.id = m.qso_id
-			WHERE m.session_id = s.id AND q.deleted_at IS NULL)
-	FROM operating_session s
-	JOIN operating_session_interval i ON i.session_id = s.id
-		AND i.seq = (SELECT MAX(seq) FROM operating_session_interval WHERE session_id = s.id)
-	WHERE s.closed_at IS NOT NULL AND s.logbook_uuid = ?
-	ORDER BY i.started_at DESC, s.id DESC
-	LIMIT ?`
+// ClosedSessionsAfter names where a further page of Continue's list begins:
+// after the last session of the page before it, in the list as it was at that
+// page's generation.
+type ClosedSessionsAfter struct {
+	Generation int64
+	SessionID  string
+}
 
-// ClosedOperatingSessionsWithContext reads Continue's list: at most limit
-// closed sessions of the file's default logbook, with the generation, in one
-// snapshot. The open session is never in it. Whether one of them can still be
-// continued is decided again, inside the transaction, when it is chosen.
-func (s *Service) ClosedOperatingSessionsWithContext(ctx context.Context, limit int) (ClosedSessions, error) {
+// Continue's list (ADR 0100 §8) is the closed sessions bound to a logbook, by
+// the start of each one's latest sitting, the most recent first, the later id
+// first among equal starts. closedSessionsOf is those sessions, each with its
+// latest sitting; its one parameter is the logbook.
+//
+// The inner join leaves out a closed session with no sitting. The record never
+// makes one, and the schema does not forbid it: closedSessionsUnreadableSQL
+// looks for one first, and the read fails rather than list a history without
+// it.
+const (
+	closedSessionsOf = `SELECT s.id, s.logbook_uuid, s.opened_at, i.started_at, i.ended_at
+		FROM operating_session s
+		JOIN operating_session_interval i ON i.session_id = s.id
+			AND i.seq = (SELECT MAX(seq) FROM operating_session_interval WHERE session_id = s.id)
+		WHERE s.closed_at IS NOT NULL AND s.logbook_uuid = ?1`
+
+	closedSessionsUnreadableSQL = `SELECT COUNT(*) FROM operating_session s
+		WHERE s.closed_at IS NOT NULL AND s.logbook_uuid = ?1
+			AND NOT EXISTS (SELECT 1 FROM operating_session_interval i WHERE i.session_id = s.id)`
+
+	// closedSessionListedSQL is whether a session (?2) is in the list.
+	closedSessionListedSQL = `SELECT COUNT(*) FROM (` + closedSessionsOf + `) WHERE id = ?2`
+
+	// closedSessionsSQL is a page of the list: at most ?3 sessions, from the
+	// start when ?2 is "", otherwise those that follow session ?2 in the list's
+	// order. The comparison is of the stored values, so a page begins exactly
+	// where the one before it ended.
+	closedSessionsSQL = `WITH listed AS (` + closedSessionsOf + `)
+		SELECT l.id, l.logbook_uuid, l.opened_at, l.started_at, l.ended_at,
+			EXISTS (SELECT 1 FROM operating_session_interval u WHERE u.session_id = l.id AND u.end_state = 'unconfirmed'),
+			(SELECT COUNT(*) FROM operating_session_member m JOIN qso q ON q.id = m.qso_id
+				WHERE m.session_id = l.id AND q.deleted_at IS NULL)
+		FROM listed l
+		WHERE ?2 = '' OR (l.started_at, l.id) < (SELECT a.started_at, a.id FROM listed a WHERE a.id = ?2)
+		ORDER BY l.started_at DESC, l.id DESC
+		LIMIT ?3`
+)
+
+// closedStart is where a page of Continue's list begins: after sessionID, or
+// from the list's start when it is "". stale is a further page of a list that
+// is not the one now in the file.
+type closedStart struct {
+	sessionID string
+	stale     bool
+}
+
+// closedSessionsStart checks that the list can be read, and that a further
+// page is of the list as it is in this snapshot.
+func closedSessionsStart(ctx context.Context, tx *sql.Tx, h sessionHead, after *ClosedSessionsAfter) (closedStart, error) {
+	var unreadable int
+	if err := tx.QueryRowContext(ctx, closedSessionsUnreadableSQL, h.defaultUUID).Scan(&unreadable); err != nil {
+		return closedStart{}, err
+	}
+	if unreadable > 0 {
+		return closedStart{}, stderr.New("a closed operating session has no sitting: the list cannot be ordered or shown whole")
+	}
+	if after == nil {
+		return closedStart{}, nil
+	}
+	if after.Generation != h.generation {
+		return closedStart{stale: true}, nil
+	}
+	var listed int
+	if err := tx.QueryRowContext(ctx, closedSessionListedSQL, h.defaultUUID, after.SessionID).Scan(&listed); err != nil {
+		return closedStart{}, err
+	}
+	return closedStart{sessionID: after.SessionID, stale: listed == 0}, nil
+}
+
+// ClosedOperatingSessionsWithContext reads a page of Continue's list: at most
+// limit closed sessions of the file's default logbook, with the generation, in
+// one snapshot. The open session is never in it. Whether one of them can still
+// be continued is decided again, inside the transaction, when it is chosen.
+//
+// With after nil the page is the list's first. Otherwise it is what follows
+// that session, and only of the same list: when the generation has moved since
+// (a session closed or continued), or the session named is no longer in the
+// list, the answer is Stale and has no sessions. Pages of two different lists
+// are never joined.
+func (s *Service) ClosedOperatingSessionsWithContext(ctx context.Context, limit int, after *ClosedSessionsAfter) (ClosedSessions, error) {
 	const op errors.Op = "sqlite.Service.ClosedOperatingSessionsWithContext"
 	if limit < 1 {
 		return ClosedSessions{}, errors.New(op).WithMsg("the limit must be at least 1")
+	}
+	if after != nil && after.SessionID == "" {
+		return ClosedSessions{}, errors.New(op).WithMsg("a further page names the session it follows")
 	}
 	var out ClosedSessions
 	err := s.readSnapshot(ctx, op, "read the closed operating sessions", func(ctx context.Context, tx *sql.Tx) error {
@@ -232,11 +307,21 @@ func (s *Service) ClosedOperatingSessionsWithContext(ctx context.Context, limit 
 		}
 		out.Generation, out.DefaultLogbookUUID = h.generation, h.defaultUUID
 		if h.defaultUUID == "" {
+			// No default logbook: the list is empty. A further page cannot be
+			// of an empty list, so it is stale and not "the end of the history".
+			out.Stale = after != nil
 			return nil
 		}
 		betweenSessionReads()
+		from, err := closedSessionsStart(ctx, tx, h, after)
+		if err != nil {
+			return err
+		}
+		if out.Stale = from.stale; out.Stale {
+			return nil
+		}
 		// One more than asked for, to say whether there are more.
-		rows, err := tx.QueryContext(ctx, closedSessionsSQL, h.defaultUUID, limit+1)
+		rows, err := tx.QueryContext(ctx, closedSessionsSQL, h.defaultUUID, from.sessionID, limit+1)
 		if err != nil {
 			return err
 		}
