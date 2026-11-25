@@ -1,10 +1,15 @@
 package testbarrier
 
 import (
+	"context"
+	"database/sql"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite" // the driver whose busy handler CountSQLiteBusy looks for
 )
 
 type order struct {
@@ -173,5 +178,124 @@ func TestWaiting_RefusesWhenNothingIsSeen(t *testing.T) {
 	})
 	if !strings.Contains(msg, "neither answered nor was seen waiting") {
 		t.Fatalf("Waiting said %q when nothing was seen", msg)
+	}
+}
+
+// writer asks a database for its writer position and gives it back.
+type writer struct{ db *sql.DB }
+
+func (w *writer) take() error {
+	conn, err := w.db.Conn(context.Background())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(context.Background(), `BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(context.Background(), `ROLLBACK`)
+	return err
+}
+
+// viaTake asks through take: both are on the waiting goroutine's stack.
+func (w *writer) viaTake() error { return w.take() }
+
+// The helper sees a writer that SQLite is making wait, by any function on its stack: a
+// connection that asked for the writer's position while another held it. It sees none
+// before the wait begins, none through a function that is not on the stack, and none
+// once the holder has let go.
+func TestWaiting_SeesAWriterSQLiteMakesWait(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "barrier.db")
+	open := func(busyMS string) *sql.DB {
+		t.Helper()
+		db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout("+busyMS+")&_pragma=journal_mode(WAL)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+	holder, waiter := open("0"), &writer{db: open("20000")}
+	held, err := holder.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+	if _, err := held.ExecContext(context.Background(), `CREATE TABLE t (n INTEGER); BEGIN IMMEDIATE; INSERT INTO t VALUES (1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	w := ExpectSQLiteBusy(t, "(*writer).take")
+	took := make(chan error, 1)
+	go func() { took <- waiter.viaTake() }()
+	Waiting(w, "the second writer", took)
+	if n := CountSQLiteBusy("(*writer).viaTake"); n != 1 {
+		// Not a race: Waiting returned with the writer seen, and it stays refused
+		// while the holder holds, but it is in the handler only between attempts.
+		deadline := time.Now().Add(5 * time.Second)
+		for CountSQLiteBusy("(*writer).viaTake") != 1 {
+			if time.Now().After(deadline) {
+				t.Fatal("the waiting writer is not seen through a function further up its stack")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	for i := 0; i < 200; i++ {
+		if n := CountSQLiteBusy("(*order).take"); n != 0 {
+			t.Fatalf("%d counted through a function that is not on the waiter's stack", n)
+		}
+	}
+
+	if _, err := held.ExecContext(context.Background(), `COMMIT`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-took:
+		if err != nil {
+			t.Fatalf("the writer that waited failed once the holder let go: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the writer that waited never finished after the holder let go")
+	}
+	if n := CountSQLiteBusy("(*writer).take"); n != 0 {
+		t.Fatalf("%d still counted as waiting after the writer finished", n)
+	}
+}
+
+// A writer that is not made to wait is an answer, not a wait: the watch refuses it, in
+// the words it keeps for an answer, and not in those for a wait that was never seen
+// (both contain "answered"). The writer itself took the position and gave it back: the
+// answer was a success, not a database error that would also have counted as one.
+func TestWaiting_RefusesAWriterThatWasNotMadeToWait(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "free.db")+"?_pragma=busy_timeout(20000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	free := &writer{db: db}
+	var (
+		took    error
+		done    = make(chan struct{}) // its own signal: Waiting consumes the answer it refuses
+		answers = make(chan error, 1)
+	)
+	msg := refused(t, func(tb testing.TB) {
+		w := ExpectSQLiteBusy(tb, "(*writer).take")
+		go func() {
+			defer close(done)
+			took = free.take()
+			answers <- took
+		}()
+		Waiting(w, "a writer nobody is in the way of", answers)
+	})
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the free writer never finished")
+	}
+	if took != nil {
+		t.Fatalf("the free writer failed (%v): the case is about a writer that succeeds without waiting", took)
+	}
+	if !strings.Contains(msg, "while it should have been waiting") {
+		t.Fatalf("the watch said %q of a writer that did not wait; want it refused as an answer", msg)
 	}
 }

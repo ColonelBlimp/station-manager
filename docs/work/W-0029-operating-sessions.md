@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built (2026-11-25, the last section; uncommitted when written) and, as ruled, not connected in the daemon's ordinary start. Its second slice, the admission's wait and the drains, is not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's review of it found no fault in the code and two in its tests (codex-259), both corrected (the last section; uncommitted when written). Its second slice, the admission's wait and the drains, is not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -4591,6 +4591,12 @@ path allows it: no member row, the session and the generation as they were.
    helper: live submits against New, Continue, an exit and a default-pointer change, on a
    database file with the production connection settings. Every stored contact has exactly
    one member row (none for a non-default logbook), and no submit fails for contention.
+   **What this does not cover, seen while building (2026-11-25):** the wait for the writer's
+   position is SQLite's busy limit, which ADR 0100 §2 leaves as it was. A writer that holds
+   that position nearly without pause for the whole limit fails a waiting contact at its
+   QSO insert ("database is locked"), with a session or without. The criterion is for a
+   contact that waits behind one control or one change and then goes on, in either order.
+   What load at the station could hold the writer that long is not established.
 5. Logging never takes the admission's lock (the brief's order: the live-entry gate, the
    session's serialization, the transaction), and neither does anything a completion job
    does after its commit that a drain waits for. Shown by a submit that completes, with its
@@ -4858,3 +4864,68 @@ commit.
 **Not built, and owed.** Slice 2: the admission's wait and the two drains (E, H). At part
 6: the call that connects the membership; the two desktop scenarios' own member rows
 (above).
+
+### Part 5, slice 1: Codex's review of its tests (codex-259; corrected 2026-11-25, uncommitted when written)
+
+Codex read the committed slice (`3cd6b57d`), found no fault in the code, and two in the
+tests. Both were checked and are right. The clean-room review of the same commit had no
+finding.
+
+**1. C4's evidence depended on scheduling, and could pass with a membership lost.** The
+contention test ran the controls beside the submits and judged the mix by counts ("at
+least two sessions", "contacts in both logbooks"). On one CPU it failed five runs of five
+(reproduced: `go test -cpu=1`), because the rounds ran before or after the submits and not
+among them; and a count of logbooks represented says nothing of a contact that should have
+joined and did not. It is replaced:
+- **The orders are forced, both ways, through the real submit**
+  (`internal/database/sqlite/operating_session_submit_order_test.go`; it is in that
+  package's external tests because it needs the storage tests' seam, and the submit is
+  `qsoservice`'s). *The contact first:* the test starts New, Continue, an exit or a change
+  of the default pointer from inside the contact's transaction, and goes on only once the
+  control is seen waiting inside SQLite's busy handler. *The control first:* the control is
+  held once it has the writer's position, and the test goes on only once the submit is seen
+  waiting at its QSO insert. Nine cases; each control's outcome is required, not only its
+  lack of an error.
+- **Every contact is checked against its own insert.** A trigger of the test's own records,
+  inside each contact's insert, whether its logbook was the file's default then and at
+  which default epoch. A contact whose logbook was the default must be in exactly one
+  session, of that logbook and that epoch; any other must be in none.
+- **Seeing a writer wait.** `internal/testbarrier` can now see a goroutine inside SQLite's
+  busy handler under a named function (`ExpectSQLiteBusy`), with its own tests. It reads the
+  driver's frame name from a goroutine dump; if a release of the driver renames it, a watch
+  fails loudly and never passes.
+- What is left in `qsoservice` is a test of contacts logged at once from several
+  goroutines, with no controls and no claim about order: no submit fails, the contacts of
+  the default logbook share one session, and every contact is where its insert put it.
+
+**2. C1 and F3 did not show that the upload row was in the failing transaction.** The
+injected failure aborted unconditionally, so a step moved ahead of the upload rows would
+have produced the same error, the same counts and the same silence. The trigger now first
+requires the contact's upload row, with an error of its own, and the test requires the
+injected one. The same check stands on every join in the bed, so the order is asserted
+where the step succeeds too. The failed record is then sent again, the same record, and
+must be stored and join.
+
+**Proved by reversion** (a temporary copy; six cases): the step moved ahead of the upload
+rows fails both the rollback test and a plain join; a read in the contact's transaction
+before its insert fails every control-first case (the contact is refused at once instead
+of waiting); the holder read before the transaction fails the contact-first cases (the
+control is not made to wait); a live submit that does not join fails the per-contact check.
+
+**A second reading (codex-260) accepted both corrections and found two things in how the
+new tests fail,** both corrected:
+- A forced-order case that failed while its control was still held went straight to the
+  seam's cleanup, which lets the control go and at once puts back package-level functions
+  the control still reads on its way out: a data race of the test's own making, reported
+  beside the real failure. Each case now lets its holder go and waits for every goroutine
+  it started before the seam is taken out, and the bed waits for them before the database
+  is closed. Shown by a case made to fail in a temporary copy under the race detector:
+  fifteen failures, each for its own reason, and no race report.
+- The barrier's test of a writer that is not made to wait accepted either of two refusals,
+  since both contain the word it looked for, and would have accepted a database error as
+  the answer. It now requires the refusal kept for an answer and that the writer succeeded.
+
+**Codex's other points, for the record.** The archive copy and transfer claim (B2) rests on
+source inspection only, as the slice's own section says. The busy-limit failure is now
+stated in C4 itself (above). Whether a contact that meets the busy limit should be tried
+again is not decided.

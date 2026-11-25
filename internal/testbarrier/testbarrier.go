@@ -47,9 +47,9 @@ const (
 // package's own tests of that refusal do not take as long.
 var patience = 20 * time.Second
 
-// Count is the number of goroutines parked for reason whose lock was taken by fn. fn is
-// the end of a function's name as the dump prints it, such as "(*Server).HoldSessionOrder".
-func Count(reason, fn string) int {
+// goroutines is every goroutine of the process as the runtime's dump gives it: its
+// header line and its stack.
+func goroutines() (headers, stacks []string) {
 	buf := make([]byte, 1<<16)
 	for {
 		n := runtime.Stack(buf, true)
@@ -59,20 +59,74 @@ func Count(reason, fn string) int {
 		}
 		buf = make([]byte, 2*len(buf))
 	}
-	n := 0
 	for _, g := range strings.Split(string(buf), "\n\n") {
 		header, stack, _ := strings.Cut(g, "\n")
-		if !strings.HasPrefix(header, "goroutine ") {
-			continue
+		if strings.HasPrefix(header, "goroutine ") {
+			headers, stacks = append(headers, header), append(stacks, stack)
 		}
+	}
+	return headers, stacks
+}
+
+// Count is the number of goroutines parked for reason whose lock was taken by fn. fn is
+// the end of a function's name as the dump prints it, such as "(*Server).HoldSessionOrder".
+func Count(reason, fn string) int {
+	headers, stacks := goroutines()
+	n := 0
+	for i, header := range headers {
 		if !strings.Contains(header, "["+reason+"]") && !strings.Contains(header, "["+reason+",") {
 			continue
 		}
-		if strings.HasSuffix(lockCaller(stack), fn) {
+		if strings.HasSuffix(lockCaller(stacks[i]), fn) {
 			n++
 		}
 	}
 	return n
+}
+
+// sqliteBusyFrame is the SQLite driver's busy handler, as the dump names it: where a
+// connection waits, and tries again, while another holds the database's writer position.
+const sqliteBusyFrame = "modernc.org/sqlite/lib._sqliteDefaultBusyCallback"
+
+// AtSQLiteBusy names, in a failure, the wait CountSQLiteBusy looks for.
+const AtSQLiteBusy = "SQLite's busy handler"
+
+// CountSQLiteBusy is the number of goroutines inside SQLite's busy handler whose stack
+// passes through fn (the end of a function's name, such as "(*Service).InsertQsoTx").
+// Such a goroutine has asked for the writer's position, been refused because another
+// connection holds it, and is waiting to ask again: the wait SQLite itself makes, which
+// nothing else in the program reports.
+//
+// A waiting writer is in the handler only while it sleeps between attempts, so one look
+// can miss it; Waiting looks until it is seen. The frame's name is the driver's
+// (modernc.org/sqlite). If a release renames it, a watch fails with "neither answered nor
+// was seen waiting", never by passing.
+func CountSQLiteBusy(fn string) int {
+	_, stacks := goroutines()
+	n := 0
+	for _, stack := range stacks {
+		if passesThrough(stack, sqliteBusyFrame) && passesThrough(stack, fn) {
+			n++
+		}
+	}
+	return n
+}
+
+// passesThrough is whether a stack has a frame whose function name ends with fn.
+func passesThrough(stack, fn string) bool {
+	for _, line := range strings.Split(stack, "\n") {
+		if line == "" || strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "created by ") {
+			continue
+		}
+		name := line
+		if i := strings.LastIndex(name, "("); i >= 0 {
+			name = name[:i]
+		}
+		if strings.HasSuffix(name, fn) {
+			return true
+		}
+	}
+	return false
 }
 
 // lockCaller is the name of the function that called into the runtime or sync package to
@@ -101,16 +155,31 @@ func lockCaller(stack string) string {
 type Watch struct {
 	t          testing.TB
 	reason, fn string
+	// count is how many goroutines are at the place now.
+	count func() int
 }
 
 // Expect begins a watch, BEFORE the operation is started. It fails the test if a
 // goroutine is already parked there: what Waiting then saw could be that one.
 func Expect(t testing.TB, reason, fn string) Watch {
 	t.Helper()
-	if n := Count(reason, fn); n != 0 {
+	return expect(t, reason, fn, func() int { return Count(reason, fn) })
+}
+
+// ExpectSQLiteBusy begins a watch for an operation that will wait in fn for the
+// database's writer position (CountSQLiteBusy), BEFORE the operation is started. It
+// fails the test if a goroutine is already waiting there.
+func ExpectSQLiteBusy(t testing.TB, fn string) Watch {
+	t.Helper()
+	return expect(t, AtSQLiteBusy, fn, func() int { return CountSQLiteBusy(fn) })
+}
+
+func expect(t testing.TB, reason, fn string, count func() int) Watch {
+	t.Helper()
+	if n := count(); n != 0 {
 		t.Fatalf("%d goroutine(s) already parked (%s in %s) before the operation was started: a wait seen there would not identify it", n, reason, fn)
 	}
-	return Watch{t: t, reason: reason, fn: fn}
+	return Watch{t: t, reason: reason, fn: fn, count: count}
 }
 
 // Waiting returns once exactly one goroutine is parked at w and the operation whose
@@ -130,7 +199,7 @@ func Waiting[T any](w Watch, what string, ch <-chan T) {
 			w.t.Fatalf("%s neither answered nor was seen waiting (%s in %s)", what, w.reason, w.fn)
 			return
 		case <-tick.C:
-			n := Count(w.reason, w.fn)
+			n := w.count()
 			if n == 0 {
 				continue
 			}

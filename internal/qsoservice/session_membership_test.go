@@ -150,7 +150,63 @@ func newUnconnectedMemberBed(t *testing.T) *memberBed {
 	}
 	b.setDefault(b.x)
 	bindFromConfig(t, b.s)
+	// The test's own record of what was true inside each contact's insert
+	// (whether its logbook was the file's default then), for
+	// everyContactIsWhereItsInsertPutIt; and its check of C1's order on every
+	// join: the step must find the contact's upload row already written.
+	b.exec(`CREATE TABLE test_at_insert (qso_id INTEGER PRIMARY KEY, was_default INTEGER NOT NULL)`)
+	b.exec(`CREATE TRIGGER test_record_at_insert AFTER INSERT ON qso BEGIN
+		INSERT INTO test_at_insert SELECT NEW.id, NEW.logbook_id IS m.default_logbook_id
+		FROM archive_metadata m WHERE m.singleton = 1;
+	END`)
+	b.exec(`CREATE TRIGGER test_upload_before_step BEFORE INSERT ON operating_session_member BEGIN
+		SELECT RAISE(ABORT, 'the step ran before the upload row')
+		WHERE NOT EXISTS (SELECT 1 FROM qso_upload u WHERE u.qso_id = NEW.qso_id);
+	END`)
 	return b
+}
+
+// failTheStep makes the logging step's member row fail, as a file that cannot
+// be written would, until the returned func is called. The failure is the
+// second thing the trigger does: first it requires the contact's upload row,
+// with an error of its own, so "injected failure" is reached only by a
+// transaction that had already written that row (C1's order, and F3's "an
+// upload-queue row really in the transaction").
+func (b *memberBed) failTheStep() (restore func()) {
+	b.t.Helper()
+	b.exec(`CREATE TRIGGER injected_failure BEFORE INSERT ON operating_session_member BEGIN
+		SELECT RAISE(ABORT, 'the step ran before the upload row')
+		WHERE NOT EXISTS (SELECT 1 FROM qso_upload u WHERE u.qso_id = NEW.qso_id);
+		SELECT RAISE(ABORT, 'injected failure');
+	END`)
+	return func() { b.t.Helper(); b.exec(`DROP TRIGGER injected_failure`) }
+}
+
+// everyContactIsWhereItsInsertPutIt checks every contact in the file against
+// what was true inside its own insert: one whose logbook was the file's
+// default then is in exactly one session, of that logbook; any other is in
+// none. It is for a test whose contacts all come through a live submit.
+func (b *memberBed) everyContactIsWhereItsInsertPutIt() {
+	b.t.Helper()
+	if n := b.count(`SELECT COUNT(*) FROM qso q WHERE NOT EXISTS (SELECT 1 FROM test_at_insert a WHERE a.qso_id = q.id)`); n != 0 {
+		b.t.Fatalf("%d contacts have no record of their insert: the test's trigger did not run", n)
+	}
+	if n := b.count(`SELECT COUNT(*) FROM test_at_insert a WHERE a.was_default = 1 AND
+		(SELECT COUNT(*) FROM operating_session_member m WHERE m.qso_id = a.qso_id) <> 1`); n != 0 {
+		b.t.Fatalf("%d contacts whose logbook was the default at their insert are not in exactly one session", n)
+	}
+	if n := b.count(`SELECT COUNT(*) FROM test_at_insert a WHERE a.was_default = 0 AND
+		EXISTS (SELECT 1 FROM operating_session_member m WHERE m.qso_id = a.qso_id)`); n != 0 {
+		b.t.Fatalf("%d contacts whose logbook was not the default at their insert are in a session", n)
+	}
+	if n := b.count(`SELECT COUNT(*) FROM operating_session_member m JOIN qso q ON q.id = m.qso_id
+		JOIN logbook l ON l.id = q.logbook_id JOIN operating_session s ON s.id = m.session_id
+		WHERE s.logbook_uuid <> l.uuid`); n != 0 {
+		b.t.Fatalf("%d contacts are members of a session of another logbook", n)
+	}
+	if n := b.count(`SELECT COUNT(*) FROM operating_session WHERE closed_at IS NULL`); n > 1 {
+		b.t.Fatalf("%d sessions are open", n)
+	}
 }
 
 func (b *memberBed) setDefault(logbook int64) {
@@ -557,23 +613,26 @@ func TestMembership_NoSessionStateRefusesAContact(t *testing.T) {
 	})
 }
 
-// C3, F3: a database failure in the logging step rolls back the QSO and its
-// upload row, which really is in the transaction; the caller gets an error
-// that is not a refusal; and nothing reports the contact as logged.
+// C1, C3, F3: a database failure in the logging step rolls back the QSO and
+// its upload row. That row really was in the transaction, before the step:
+// the failure injected is reached only after the trigger has found it
+// (failTheStep). The caller gets an error that is not a refusal, and nothing
+// reports the contact as logged. The same record, sent again once the file
+// can be written, is stored and joins: the failure left nothing of it behind.
 func TestMembership_AFailedStepRollsBackTheContact(t *testing.T) {
 	b := newMemberBed(t)
-	b.open(memLifeA)
+	st := b.open(memLifeA)
 	b.live(b.x)
 	notified := 0
 	b.s.SetCommitNotifier(func() { notified++ })
 	ch, cancel := b.s.Hub.Subscribe()
 	defer cancel()
-	b.exec(`CREATE TRIGGER injected_failure BEFORE INSERT ON operating_session_member
-		BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
+	restore := b.failTheStep()
 	before := b.record()
 	qsos, uploads := b.count(`SELECT COUNT(*) FROM qso`), b.count(`SELECT COUNT(*) FROM qso_upload`)
+	rec := b.nextRec()
 
-	res, err := b.s.SubmitLive(context.Background(), b.x, b.nextRec(), false)
+	res, err := b.s.SubmitLive(context.Background(), b.x, rec, false)
 
 	if err == nil || IsSubmitError(err) != nil || res.Status != "" {
 		t.Fatalf("the submit answered %+v, %v; want a failure that is not a refusal", res, err)
@@ -591,10 +650,18 @@ func TestMembership_AFailedStepRollsBackTheContact(t *testing.T) {
 		t.Fatalf("a contact that was not stored was reported: %d qso.stored, %d commit notices, changes %v", n, notified, told)
 	}
 
-	// The same contact, once the file can be written: stored, and a member.
-	b.exec(`DROP TRIGGER injected_failure`)
-	if qso := b.live(b.x); b.memberOf(qso) == "" {
-		t.Fatal("the contact did not join once the failure was removed")
+	// The same record again, once the file can be written. Stored, not a
+	// duplicate of anything the failure left; a member; and reported once.
+	restore()
+	again, err := b.s.SubmitLive(context.Background(), b.x, rec, false)
+	if err != nil || again.Status != "stored" {
+		t.Fatalf("the same record, sent again: %+v, %v; want it stored", again, err)
+	}
+	if b.memberOf(again.ID) != st.Open.ID || b.uploads(again.ID) != 1 {
+		t.Fatalf("sent again, the contact is in %q with %d upload rows; want the open session %s and one", b.memberOf(again.ID), b.uploads(again.ID), st.Open.ID)
+	}
+	if n := drainStored(ch); n != 1 || notified != 1 {
+		t.Fatalf("the stored contact was reported by %d qso.stored and %d commit notices; want one of each", n, notified)
 	}
 }
 
@@ -602,29 +669,35 @@ func TestMembership_AFailedStepRollsBackTheContact(t *testing.T) {
 // session goes with the contact, and nobody is told of a change.
 func TestMembership_AFailedStepRollsBackTheSessionItOpened(t *testing.T) {
 	b := newMemberBed(t)
-	b.exec(`CREATE TRIGGER injected_failure BEFORE INSERT ON operating_session_member
-		BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
+	b.failTheStep()
 	before := b.record()
-	if _, err := b.s.SubmitLive(context.Background(), b.x, b.nextRec(), false); err == nil {
-		t.Fatal("the submit succeeded with the member row refused")
+	_, err := b.s.SubmitLive(context.Background(), b.x, b.nextRec(), false)
+	if err == nil || !strings.Contains(err.Error(), "injected failure") {
+		t.Fatalf("the submit answered %v; want the injected failure", err)
 	}
 	if after := b.record(); after != before || len(b.told()) != 0 || b.count(`SELECT COUNT(*) FROM qso`) != 0 {
 		t.Fatalf("a rolled-back contact left something behind:\n%s\nwas\n%s", after, before)
 	}
 }
 
-const contendSubmitters, contendEach = 4, 15
-
-// contendSubmits logs submitters*each live contacts from several goroutines
-// while control runs, one round begun with each submit, and fails the test
-// if any call fails or the file's invariants do not hold afterwards.
-func contendSubmits(t *testing.T, b *memberBed, control func(round int) error) {
-	const submitters, each = contendSubmitters, contendEach
-	t.Helper()
+// A1 for contacts logged at once: several submitters, each logging contacts
+// into the default logbook and into another, with no session open at the
+// start. No submit fails; the contacts of the default logbook share one
+// session; every contact is where its own insert put it.
+//
+// This forces no order and makes no claim about one. C4's evidence, a live
+// submit against New, Continue, an exit and a change of the default pointer
+// with each writer first in turn, is internal/database/sqlite's
+// operating_session_submit_order_test.go. An earlier form of this test ran
+// those controls beside the submits and judged the mix by counts: it depended
+// on how the goroutines were scheduled, and could pass with a contact's
+// membership lost (Codex's review, codex-259).
+func TestMembership_ContactsLoggedAtOnceEachJoin(t *testing.T) {
+	const submitters, each = 4, 15
+	b := newMemberBed(t)
 	ctx := context.Background()
 	var wg sync.WaitGroup
-	errs := make(chan error, submitters*each+1)
-	rounds := make(chan struct{}, submitters*each)
+	errs := make(chan error, submitters*each)
 	for w := 0; w < submitters; w++ {
 		wg.Add(1)
 		go func(w int) {
@@ -634,7 +707,6 @@ func contendSubmits(t *testing.T, b *memberBed, control func(round int) error) {
 				if (w+i)%3 == 0 {
 					logbook = b.y
 				}
-				rounds <- struct{}{}
 				res, err := b.s.SubmitLive(ctx, logbook, b.nextRec(), false)
 				if err != nil || res.Status != "stored" {
 					errs <- fmt.Errorf("a live submit into logbook %d: %+v, %w", logbook, res, err)
@@ -643,113 +715,18 @@ func contendSubmits(t *testing.T, b *memberBed, control func(round int) error) {
 			}
 		}(w)
 	}
-	controls := make(chan error, 1)
-	go func() {
-		round := 0
-		for range rounds {
-			if err := control(round); err != nil {
-				controls <- err
-				for range rounds { // let the submitters finish
-				}
-				return
-			}
-			round++
-		}
-		controls <- nil
-	}()
 	wg.Wait()
-	close(rounds)
 	close(errs)
 	for err := range errs {
 		t.Error(err)
 	}
-	if err := <-controls; err != nil {
-		t.Errorf("a control failed: %v", err)
-	}
 	if n := b.count(`SELECT COUNT(*) FROM qso`); n != submitters*each {
 		t.Fatalf("%d contacts stored, want %d", n, submitters*each)
 	}
-	if n := b.count(`SELECT COUNT(*) FROM operating_session_member m JOIN qso q ON q.id = m.qso_id
-		JOIN logbook l ON l.id = q.logbook_id JOIN operating_session s ON s.id = m.session_id
-		WHERE s.logbook_uuid <> l.uuid`); n != 0 {
-		t.Fatalf("%d contacts are members of a session of another logbook", n)
+	b.everyContactIsWhereItsInsertPutIt()
+	if sessions, told := b.count(`SELECT COUNT(*) FROM operating_session`), b.told(); sessions != 1 || len(told) != 1 {
+		t.Fatalf("%d sessions and changes told %v; want the one session the first contact opened, told once", sessions, told)
 	}
-	if n := b.count(`SELECT COUNT(*) FROM operating_session WHERE closed_at IS NULL`); n > 1 {
-		t.Fatalf("%d sessions are open", n)
-	}
-}
-
-// C4: contention is not a failure, shown through the real submit. Live
-// submits run against the session's controls and against changes of the
-// default pointer, on the file with the configuration's own connection
-// settings. No call fails, and every contact is in at most one session, which
-// is always its own logbook's.
-//
-// The controls are paced by the submits: one round begins as each submit
-// does, so every round overlaps contacts being logged. They are not run in a
-// loop of their own. A loop of durable transactions with no pause holds the
-// writer's position nearly all the time, SQLite's busy handler gives a waiting
-// writer no turn, and a submit then fails at its QSO insert when the busy
-// limit passes: seen here under the race detector, 2026-11-25. That is
-// saturation of the file, with or without a session, and not what an operator
-// pressing New does.
-func TestMembership_ContentionIsNotAFailure(t *testing.T) {
-	t.Run("against New, Continue and an exit", func(t *testing.T) {
-		b := newMemberBed(t)
-		ctx := context.Background()
-		contendSubmits(t, b, func(round int) error {
-			// Each round is a new app: it answers New for whatever session it
-			// finds, continues the one it closed, and exits.
-			life := fmt.Sprintf("lifetime-%d", round)
-			b.setHolder(life)
-			st, _, err := b.s.DB.OpenOperatingSessionWithContext(ctx, life, memberMorning)
-			if err != nil {
-				return err
-			}
-			earlier := ""
-			if st.Open != nil {
-				earlier = st.Open.ID
-			}
-			if st, _, err = b.s.DB.NewOperatingSessionWithContext(ctx, life, st.Generation, memberMorning); err != nil {
-				return err
-			}
-			if earlier != "" {
-				if st, _, err = b.s.DB.ContinueOperatingSessionWithContext(ctx, life, st.Generation, earlier, memberMorning); err != nil {
-					return err
-				}
-			}
-			_, _, err = b.s.DB.RecordOperatingAppExitWithContext(ctx, life, st.Generation, true, memberMorning)
-			return err
-		})
-		if sessions, exits := b.count(`SELECT COUNT(*) FROM operating_session`), b.count(`SELECT COUNT(*) FROM operating_app_exit`); sessions < 2 || exits < 1 {
-			t.Fatalf("%d sessions and %d exits: the controls did not run against the submits, so the case proves nothing", sessions, exits)
-		}
-		// The default never moved: every contact of X is in exactly one session
-		// and no contact of Y is in any.
-		if n := b.count(`SELECT COUNT(*) FROM qso q WHERE q.logbook_id = ? AND
-			(SELECT COUNT(*) FROM operating_session_member m WHERE m.qso_id = q.id) <> 1`, b.x); n != 0 {
-			t.Fatalf("%d contacts of the default logbook are not in exactly one session", n)
-		}
-		if n := b.count(`SELECT COUNT(*) FROM operating_session_member m JOIN qso q ON q.id = m.qso_id WHERE q.logbook_id = ?`, b.y); n != 0 {
-			t.Fatalf("%d contacts of another logbook joined a session", n)
-		}
-	})
-	t.Run("against changes of the default pointer", func(t *testing.T) {
-		b := newMemberBed(t)
-		contendSubmits(t, b, func(round int) error {
-			to := b.y
-			if round%2 == 1 {
-				to = b.x
-			}
-			return b.s.DB.SetArchiveDefaultLogbookWithContext(context.Background(), to)
-		})
-		if epoch := b.count(`SELECT default_epoch FROM archive_metadata WHERE singleton = 1`); epoch < 3 {
-			t.Fatalf("the default epoch is %d: the pointer did not move against the submits, so the case proves nothing", epoch)
-		}
-		if n := b.count(`SELECT COUNT(DISTINCT s.logbook_uuid) FROM operating_session_member m JOIN operating_session s ON s.id = m.session_id`); n != 2 {
-			t.Fatalf("contacts joined sessions of %d logbooks; the case wants both, each while it was the default", n)
-		}
-	})
 }
 
 // ---- D: the session a contact opens ----
