@@ -14,6 +14,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/email"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -559,4 +560,53 @@ func TestSessionEmailMark_ResendOfEmailedRow(t *testing.T) {
 	resp := f.send(context.Background(), a)
 
 	wantUUIDs(t, "second emailed", resp.Emailed, []string{a})
+}
+
+// A stamp is announced (W-0029 part 6; operator ruling 2026-11-25, question
+// 6). The Session panel's "already emailed" mark comes from the contact's own
+// record, so a window other than the one that sent the mail has to hear that
+// the record changed: the send publishes qso.updated for each contact it
+// stamped, and for no other. Here A is stamped and B is not (the attempt that
+// would have stamped B loses its race, and the later ones fail): one event,
+// A's.
+func TestSessionEmailMark_AStampIsAnnouncedForExactlyTheContactsStamped(t *testing.T) {
+	f := newMarkFixture(t)
+	idA, a := f.qso("M0CMA", "0845")
+	_, b := f.qso("M0CMB", "0846")
+	attempt := 0
+	f.srv.sessionEmailBeforeMark = func(n int) {
+		attempt = n
+		if n == 1 {
+			f.bookkeep(b)
+		}
+	}
+	failingMarkFrom(f, &attempt, 2, stderrs.New("injected marking failure"))
+	ch, cancel := f.srv.hub.Subscribe()
+	defer cancel()
+
+	resp := f.send(context.Background(), a, b)
+
+	wantUUIDs(t, "emailed", resp.Emailed, []string{a})
+	var updated []events.QsoUpdatedPayload
+	for drained := false; !drained; {
+		select {
+		case ev := <-ch:
+			if ev.Name == events.NameQsoUpdated {
+				updated = append(updated, ev.Payload.(events.QsoUpdatedPayload))
+			}
+		default:
+			drained = true
+		}
+	}
+	if len(updated) != 1 || updated[0].QsoUUID != a || updated[0].QsoID != idA || updated[0].LogbookID != f.lbID {
+		t.Fatalf("the send announced %+v; want one qso.updated, for the contact it stamped (%s, id %d, logbook %d)", updated, a, idA, f.lbID)
+	}
+	// And the stamp is what the panel's row reads as "emailed": the contact this
+	// send stamped, and not one that no send has stamped. (B does read as
+	// emailed: the fixture's concurrent writer stamped it, which is why this
+	// send lost it.)
+	_, never := f.qso("M0CMD", "0847")
+	if !memberBody(f.row(a)).Emailed || memberBody(f.row(never)).Emailed {
+		t.Fatalf("the rows read emailed %v and %v; want the stamped contact and not the one never sent", memberBody(f.row(a)).Emailed, memberBody(f.row(never)).Emailed)
+	}
 }

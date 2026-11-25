@@ -538,7 +538,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 
 	// The logging step, last in the transaction (ADR 0100 §2; W-0029 part 5,
 	// C1): the QSO's row has held the writer's position since its insert.
-	sessionChanged, err := s.joinSession(ctx, tx, qsoID, mode)
+	sessionID, sessionChanged, err := s.joinSession(ctx, tx, qsoID, mode)
 	if err != nil {
 		s.rollbackTx(tx, op)
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to put the QSO into the operating session")
@@ -551,9 +551,10 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	s.logStored(qsoID, qso, forwardedTo, force, isImport)
 
 	s.Hub.Publish(events.NameQsoStored, events.QsoStoredPayload{
-		QsoUUID:   qso.UUID,
-		QsoID:     qsoID,
-		LogbookID: logbookID,
+		QsoUUID:            qso.UUID,
+		QsoID:              qsoID,
+		LogbookID:          logbookID,
+		OperatingSessionID: sessionID,
 	})
 	s.notifyCommitted()
 	sessionChanged()

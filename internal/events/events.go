@@ -54,6 +54,13 @@ type QsoStoredPayload struct {
 	QsoUUID   string `json:"qso_uuid"`
 	QsoID     int64  `json:"qso_id"` // DEPRECATED (removed v2.0.0-alpha.3); use qso_uuid
 	LogbookID int64  `json:"logbook_id"`
+	// OperatingSessionID is the operating session the contact joined, in its
+	// own transaction (ADR 0100 §2; W-0029 part 6): how a window learns that a
+	// stored contact is a member. Left out for a contact that joined none: an
+	// import, a restore, a deliberate submit, a contact of another logbook. It
+	// is the session the contact is IN, which need not be the one open when
+	// the event is read.
+	OperatingSessionID string `json:"operating_session_id,omitempty"`
 }
 
 // QsoUpdatedPayload is the payload for NameQsoUpdated. See QsoStoredPayload for the

@@ -38,16 +38,21 @@ func (s *Service) SetSessionMembership(m *SessionMembership) { s.membership.Stor
 // joinSession is the logging step of a submit (ADR 0100 §2): for a contact
 // made while operating, with the membership connected, it puts the QSO just
 // written in tx into the open session. The step itself leaves a QSO outside
-// the file's default logbook in no session. It returns what to call once the
-// contact has committed and been announced: the telling of a generation the
-// step advanced, and otherwise nothing.
+// the file's default logbook in no session.
+//
+// It returns the session the contact joined, "" for none: the step's own
+// answer, from the contact's transaction, for the contact's qso.stored. It is
+// never looked up after the commit, when another session may be the one open
+// (W-0029 part 6). And it returns what to call once the contact has committed
+// and been announced: the telling of a generation the step advanced, and
+// otherwise nothing.
 //
 // An error is a database failure. The caller rolls the contact back with it.
-func (s *Service) joinSession(ctx context.Context, tx *sql.Tx, qsoID int64, mode submitMode) (committed func(), err error) {
+func (s *Service) joinSession(ctx context.Context, tx *sql.Tx, qsoID int64, mode submitMode) (sessionID string, committed func(), err error) {
 	nothing := func() {}
 	m := s.membership.Load()
 	if mode != submitOperating || m == nil {
-		return nothing, nil
+		return "", nothing, nil
 	}
 	holder, now := "", time.Now
 	if m.Holder != nil {
@@ -58,10 +63,10 @@ func (s *Service) joinSession(ctx context.Context, tx *sql.Tx, qsoID int64, mode
 	}
 	joined, err := s.DB.JoinOperatingSessionTx(ctx, tx, qsoID, holder, now())
 	if err != nil {
-		return nothing, err
+		return "", nothing, err
 	}
 	if !joined.Advanced || m.Advanced == nil {
-		return nothing, nil
+		return joined.SessionID, nothing, nil
 	}
-	return func() { m.Advanced(joined.Generation) }, nil
+	return joined.SessionID, func() { m.Advanced(joined.Generation) }, nil
 }

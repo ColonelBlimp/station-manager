@@ -905,3 +905,160 @@ func TestMembership_LaterChangesKeepTheMemberRow(t *testing.T) {
 		t.Fatalf("an edit or a delete moved the generation from %d to %d", st.Generation, b.generation())
 	}
 }
+
+// ---- Part 6, slice 1: qso.stored names the session the contact joined ----
+
+// storedEvents drains the hub of qso.stored events and returns their payloads.
+func storedEvents(ch <-chan events.Event) []events.QsoStoredPayload {
+	var out []events.QsoStoredPayload
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Name == events.NameQsoStored {
+				out = append(out, ev.Payload.(events.QsoStoredPayload))
+			}
+		default:
+			return out
+		}
+	}
+}
+
+// A window learns that a stored contact is a member from the contact's own
+// qso.stored (W-0029 part 6). It names the session the contact joined: the
+// open one for a plain join, the new one for the contact that opened it. It
+// names none for a contact that joined none: a deliberate submit, a live
+// submit to another logbook, an import, and any contact while the membership
+// is not connected.
+func TestMembership_QsoStoredNamesTheSessionJoined(t *testing.T) {
+	ctx := context.Background()
+	t.Run("a plain join, and the contact that opens a session", func(t *testing.T) {
+		b := newMemberBed(t)
+		ch, cancel := b.s.Hub.Subscribe()
+		defer cancel()
+
+		opener := b.live(b.x) // no session open: it opens one
+		joiner := b.live(b.x)
+
+		got := storedEvents(ch)
+		session := b.memberOf(opener)
+		if len(got) != 2 || got[0].QsoID != opener || got[1].QsoID != joiner {
+			t.Fatalf("the events are %+v; want one for each contact, in order", got)
+		}
+		if session == "" || got[0].OperatingSessionID != session || got[1].OperatingSessionID != session {
+			t.Fatalf("the events name sessions %q and %q; want %s, which both contacts joined", got[0].OperatingSessionID, got[1].OperatingSessionID, session)
+		}
+	})
+	t.Run("a contact that joined none names none", func(t *testing.T) {
+		b := newMemberBed(t)
+		b.open(memLifeA)
+		ch, cancel := b.s.Hub.Subscribe()
+		defer cancel()
+
+		if _, err := b.s.Submit(ctx, b.x, b.nextRec(), false); err != nil { // deliberate
+			t.Fatal(err)
+		}
+		b.live(b.y) // another logbook
+		rec := b.nextRec()
+		rec.StationCallsign = "G4ABC"
+		if _, err := b.s.SubmitImport(ctx, b.x, rec, false, nil); err != nil {
+			t.Fatal(err)
+		}
+
+		got := storedEvents(ch)
+		if len(got) != 3 {
+			t.Fatalf("%d events, want one for each of the three contacts", len(got))
+		}
+		for _, p := range got {
+			if p.OperatingSessionID != "" {
+				t.Fatalf("the event for contact %d names session %q; it joined none", p.QsoID, p.OperatingSessionID)
+			}
+		}
+	})
+	t.Run("unconnected, a live contact names none", func(t *testing.T) {
+		b := newUnconnectedMemberBed(t)
+		ch, cancel := b.s.Hub.Subscribe()
+		defer cancel()
+		b.live(b.x)
+		if got := storedEvents(ch); len(got) != 1 || got[0].OperatingSessionID != "" {
+			t.Fatalf("the event is %+v; want it to name no session", got)
+		}
+	})
+}
+
+// The first contact's qso.stored is published before the telling of the
+// session it opened. A window therefore meets a contact of a session it does
+// not show yet; the order is pinned here so that the page's handling of it is
+// tested against what the daemon really does.
+func TestMembership_QsoStoredComesBeforeTheSessionsChange(t *testing.T) {
+	b := newUnconnectedMemberBed(t)
+	ch, cancel := b.s.Hub.Subscribe()
+	defer cancel()
+	var order []string
+	b.s.SetSessionMembership(&SessionMembership{
+		Holder: func() string { return memLifeA },
+		Advanced: func(int64) {
+			if got := storedEvents(ch); len(got) == 1 {
+				order = append(order, "qso.stored for session "+got[0].OperatingSessionID)
+			}
+			order = append(order, "the session's change")
+		},
+		Now: func() time.Time { return memberMorning },
+	})
+	qso := b.live(b.x)
+	want := []string{"qso.stored for session " + b.memberOf(qso), "the session's change"}
+	if len(order) != 2 || order[0] != want[0] || order[1] != want[1] {
+		t.Fatalf("the order was %v; want %v", order, want)
+	}
+}
+
+// runAtLine is a log writer that runs fn once, when a line holding marker is
+// written. It is this fixture's own: the test logger holds its lock while it
+// writes, so whatever fn does must not log through the same writer.
+type runAtLine struct {
+	marker string
+	fn     func()
+	ran    bool
+}
+
+func (w *runAtLine) Write(p []byte) (int, error) {
+	if !w.ran && strings.Contains(string(p), w.marker) {
+		w.ran = true
+		w.fn()
+	}
+	return len(p), nil
+}
+
+// The session named is the one the contact's own transaction put it in, not
+// one looked up afterwards. Here New is run after the contact has committed
+// and before its event is published (at the "QSO stored" log line, which is
+// written between the two): the event names the session the contact is in,
+// which New has just closed, and not the session then open.
+func TestMembership_QsoStoredNamesTheContactsSessionNotTheOneOpenLater(t *testing.T) {
+	b := newMemberBed(t)
+	st := b.open(memLifeA)
+	b.live(b.x) // so that New keeps the session
+	ch, cancel := b.s.Hub.Subscribe()
+	defer cancel()
+	var newErr error
+	b.s.Logger = logging.NewForWriter(&runAtLine{marker: "QSO stored", fn: func() {
+		now := b.state(memLifeA)
+		if _, outcome, err := b.s.DB.NewOperatingSessionWithContext(context.Background(), memLifeA, now.Generation, memberMorning); err != nil || outcome != sqlite.SessionApplied {
+			newErr = fmt.Errorf("the New at the log line: %s, %v", outcome, err)
+		}
+	}})
+
+	qso := b.live(b.x)
+
+	if newErr != nil {
+		t.Fatal(newErr)
+	}
+	open := b.state(memLifeA).Open
+	if b.memberOf(qso) != st.Open.ID || open == nil || open.ID == st.Open.ID {
+		t.Fatalf("the fixture: the contact is in %q and %+v is open; want it in %s, with another session open", b.memberOf(qso), open, st.Open.ID)
+	}
+	got := storedEvents(ch)
+	if len(got) != 1 || got[0].QsoID != qso || got[0].OperatingSessionID != st.Open.ID {
+		t.Fatalf("the event is %+v; want it to name %s, the session the contact joined, and not %s, the one open when it was published",
+			got, st.Open.ID, open.ID)
+	}
+}

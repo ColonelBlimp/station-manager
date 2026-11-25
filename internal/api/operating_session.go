@@ -162,6 +162,7 @@ func (s *Server) ConnectSessionMembership() {
 
 func (s *Server) registerOperatingSession(apiMux *routeMux) {
 	apiMux.HandleFunc("GET /v1/operating-session", s.handleOperatingSessionRead)
+	s.registerOperatingSessionReads(apiMux)
 	s.registerOperatingSessionControls(apiMux)
 }
 

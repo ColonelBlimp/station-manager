@@ -16,6 +16,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/fsperm"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -411,6 +412,7 @@ func (s *Server) stampSessionEmailed(ctx context.Context, qsos types.QsoSlice) (
 		if _, ok := confirmed[q.ID]; ok {
 			emailed = append(emailed, q.UUID)
 			confirmedIDs = append(confirmedIDs, q.ID)
+			s.announceStamp(q)
 		}
 	}
 	if len(emailed) != len(qsos) {
@@ -454,6 +456,19 @@ func (s *Server) markingContext(parent context.Context, deadline time.Time) (con
 		return s.sessionMarkContext(parent, deadline)
 	}
 	return context.WithDeadline(parent, deadline)
+}
+
+// announceStamp publishes that a contact's record changed when this send
+// stamped it as forwarded by email (W-0029 part 6; operator ruling 2026-11-25).
+// The stamp is an edit of the record like any other, and the Session panel
+// reads its "already emailed" mark from the record: a window other than the
+// one that sent the mail hears of it this way. Only a confirmed stamp is
+// announced, after its commit.
+func (s *Server) announceStamp(q types.Qso) {
+	if s.hub == nil {
+		return
+	}
+	s.hub.Publish(events.NameQsoUpdated, events.QsoUpdatedPayload{QsoUUID: q.UUID, QsoID: q.ID, LogbookID: q.LogbookID})
 }
 
 func (s *Server) verifyCurrentQsos(ctx context.Context, ids []int64) (map[int64]types.Qso, error) {

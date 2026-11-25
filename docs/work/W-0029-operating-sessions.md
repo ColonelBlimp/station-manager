@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built. Part 5 stays unconnected until part 6.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is built (2026-11-25, the last section; uncommitted when written): nothing in the app uses it yet and it changes nothing at the station. The cutover and the controls are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -269,6 +269,29 @@ next part starts.
   scenario that the clean-room review of `ef9b8968` called for, said after Codex closed
   its review of it (codex-231).
 - **2026-11-24 (operator): "start on part 5".** The criteria first, as for parts 1 to 4.
+- **2026-11-25 (operator): "1-9 accepted".** Said of the nine questions at the end of part
+  6's acceptance criteria, each as recommended there:
+  1. **The session's start** is a line in the panel's header beside the count: "Started
+     09:15 UTC", with the date when it is not today's (UTC). For a continued session it is
+     the session's first start; the clock counts the current sitting.
+  2. **New does not ask before it acts.**
+  3. **Continue's list** shows the 20 most recent with "Show more"; a line reads "2026-11-20
+     09:15 to 11:42 UTC · 37 contacts", with no end time where the last sitting has none and
+     "an end not confirmed" when any sitting of that session ended without a confirmed exit.
+     Beside the control: "Contacts stay in the session they were logged in."
+  4. **With no session open the clock shows nothing.**
+  5. **The panel shows every row of the session,** and the daemon's read of them is not
+     capped.
+  6. **The "already emailed" mark comes from the contact's own record from part 6,** with
+     what that brings: a partial send shows exactly the contacts stamped, and the email
+     route announces a stamp so that another reader hears of it.
+  7. **The station may run the cutover before the controls are built,** as a deploy the
+     operator chooses.
+  8. **A contact made at another time is added with `smctl import`,** not by the live
+     route.
+  9. **For the install of the cutover the app is closed normally before it and opened
+     after.** Nothing is built to reload an open window for a newer build.
+- **2026-11-25 (operator): "start on part 6".** The criteria first, as for parts 1 to 5.
 - **2026-11-25 (operator): "slice 2 of part 5".** The second slice as proposed: the
   admission's wait and the drains (E, H).
 - **2026-11-25 (operator): "slice 1 of part 5".** The first slice as proposed in part 5's
@@ -5066,3 +5089,431 @@ clean. The whole local CI: run before any commit.
 the wait; the two desktop scenarios' own member rows (above); the canonical documents
 (`docs/v2-design/`), which describe what the station does and so wait for the connection.
 Not decided: a retry at SQLite's busy limit; the hand-add helper's route.
+
+### Part 6: acceptance criteria (2026-11-25; revised after Codex's reviews, codex-266 and codex-267; its nine questions ruled 2026-11-25; nothing built)
+
+Directed by the operator, 2026-11-25: "start on part 6". As with parts 1 to 5, the criteria
+come first and nothing is built until they are reviewed and their questions ruled.
+
+**What Codex's review changed (codex-266; each claim checked in the tree before it was
+taken).**
+1. **A generation does not order changes to a session's rows.** A contact joining the open
+   session moves no generation, so "never rows of an older generation" let a list read sent
+   before a contact joined erase that contact when it returned late, and let a late read of
+   one contact put back a row deleted since. B is rewritten, with those orders as tests.
+2. **The session a contact joined must come from its own transaction.** The step returns
+   it, and the service drops it (`joinSession` keeps only the telling of an advance). A
+   lookup after the commit can name the wrong session if New wins in between. The proposal
+   for the daemon says so, with that order as a test.
+3. **The FT8 confirmation depended on the window's own list.** `ft8Logged.ts` decides
+   whether a frame is a repeat by looking for its UUID in the list; once the daemon's rows
+   are there first, the toast and the worked mark would be lost. A8 is new.
+4. **The controls and the switch were incomplete against ADR 0100:** a Continue choice bound
+   to the list the operator saw; the lost answer, the ineligible target and the failed
+   Continue; the sort; a session whose only contact is deleted; an unconfirmed end that is
+   not the last; a switch that fails after its close. E, F and C5 take them.
+5. **An app left open across the install keeps the page it has.** A daemon restart on the
+   same archive and default reloads nothing (`verifyArchiveGeneration`,
+   `frontend/app/src/lib/config/archives.svelte.ts`), and nothing compares builds. H is new,
+   and question 9.
+
+**What its second reading changed (codex-267; checked the same way).**
+1. **Two orders still passed every check of B.** A list read held across a break in the
+   event stream, during which a contact was deleted, restored the row when it returned
+   last: the page had never heard of the deletion. And of two reads of one contact after
+   two edits, the older returning last undid the newer. B3 and B4 take both.
+2. **Contact events name no archive** (`qso.updated` and `qso.deleted` carry the contact's
+   UUID and its logbook, `internal/events/events.go`), and a UUID can exist in two archives.
+   B9 is new.
+3. **A failed switch need never show `archive_switching`.** The switch holds the admission's
+   order from before its close until it has answered (`Manager.Activate`,
+   `takeSessionOrder`), and the session's read takes that order, so a read prompted by the
+   close first sees what the failed switch left. C5 and F7 are corrected, and Codex
+   corrects its own earlier wording with them.
+4. **Question 9:** a page can only reload itself for a newer build if it already has the
+   check. Installing a slice that adds the check does not give it to a window that was open
+   before. My sentence that it would was wrong; the question is rewritten.
+
+**What part 6 is.** The Session the operator looks at becomes the daemon's. The panel's
+rows, the rail's count, the header's clock and the two controls read the session the daemon
+holds, and the lists each window kept for itself are retired. It is also where part 5 is
+switched on: from this part a contact logged while operating joins the open session, and
+that is what the panel shows.
+
+**What the operator sees.**
+- Starting the app opens a session, and the panel says when it started.
+- The panel lists the contacts of that session and nothing else: not an import, not a
+  contact logged by a deliberate submit to another logbook, not a contact from an earlier
+  session. A reload shows the same list. A contact edited or deleted in the Logbook changes
+  or leaves the panel without a reload.
+- The rail's count and the panel's count are the same number, and it is the daemon's.
+- The header's clock counts the current sitting. It does not restart at a reload or at a
+  daemon restart. It starts again at zero at New and at Continue.
+- The panel has New session, and Continue with a list of earlier sessions to choose from.
+- After a crash, a kill or a power cut with a contact logged, the next start asks Continue
+  or New before the workspace (part 4's screen; it cannot appear before this part).
+- **On the day it is installed the panel starts empty.** Contacts logged before it are in
+  no session (ADR 0100 §2: no backfill), and a list a window kept for itself is not carried
+  over. They are in the Logbook as before.
+
+**Nearest confusable outcome** (the brief's, restated for this part). The panel looks right
+because it is still drawing a list of its own: rows it added itself when it logged, kept
+across a reload, which agree with the daemon's until the first import, delete elsewhere,
+deliberate submit or second window. Every criterion below is judged on a difference between
+the two: a row the daemon has and the window never added, or one the window would have
+added and the daemon does not have.
+
+**What is already there** (read in the tree, 2026-11-25).
+- The page's list is `session.qsos` (`frontend/app/src/lib/operate/session.svelte.ts`), kept
+  in `sessionStorage` under `sm.session.qsos.<archive>`. Rows are added by the window that
+  logged them: from the Phone/CW submit's answer (`main.ts`) and from `ft8-logged` on its
+  FT8 stream (`ft8Logged.ts`). Its readers: `SessionPanel`, the rail's badge (`UtilRail`),
+  `ExportDialog` (rows, and an `emailed` mark it sets itself), the in-place edit
+  (`sessionEdit.svelte.ts`, which writes the merged row back into the list), and Band
+  Activity's worked-this-session check (`Ft8BandActivity.svelte`, with `sm.ft8.engaged`).
+- The clock is `SessionTimer.svelte`, in the header: its own start in `sessionStorage`
+  under `sm.session.startedAt`, set when a window first loads.
+- The daemon has: the session's state read (`GET /v1/operating-session`: generation, state,
+  and for the open session its id, logbook, `opened_at`, `sitting_started_at`,
+  `has_contacts`, `contact_count`, `held_by_you`); New and Continue as routes
+  (`POST /v1/operating-session/new`, `/continue`, part 4), which answer the state they left
+  and refuse a stale generation with the current state; one event,
+  `operating_session.changed` `{archive_id, generation}`.
+- The page already reads that state at every load, when its event stream opens or reopens
+  and on each `operating_session.changed` (`recovery.svelte.ts`), and draws it by one rule:
+  only for the archive the boot has proven, and never a state older than the one drawn.
+- **The daemon has no read of a session's contacts and no list of closed sessions.** No
+  event says that a stored contact joined a session: `qso.stored` names the contact and its
+  logbook.
+- The desktop app has one window. Detached panels and the Map as a window of its own are
+  W-0027 A2 and part 7.
+
+**A. The rows are the daemon's.**
+1. With a session open, the panel shows that session's members that are not deleted, newest
+   first, in today's columns, and its count is their number.
+2. A contact logged in the window appears in the panel because the daemon says it is a
+   member, not because the window logged it. Shown with a contact the window logs that does
+   not join (a deliberate submit to another logbook): it is stored and is not in the panel.
+3. A contact the window did not log appears without a reload when it joins: an FT8
+   completion, and a live contact stored through another connection.
+4. A contact in the session that is edited elsewhere shows the edit; one deleted elsewhere
+   leaves the panel and the counts drop by one; an import and a restore never appear.
+5. A reload, and a daemon restart with the app left running, show the same rows.
+6. The in-place edit from the panel still works and stays on the page; the row then shows
+   the daemon's merged contact.
+7. Band Activity's worked-this-session check reads these rows. The Export dialog offers
+   these rows, and sends their UUIDs to the routes it uses today (part 8 changes the
+   routes). The panel, the rail and the members the Export dialog can choose from are always
+   the same; "send only not yet emailed" still chooses its own part of them.
+8. **An FT8 contact is confirmed once, whichever word arrives first.** The daemon's word
+   that the contact is a member, and the FT8 stream's `ft8-logged`, come by two routes.
+   In either order, and with `ft8-logged` delivered twice: one row, one "QSO logged" toast,
+   and the worked mark set once, for the archive the frame names.
+
+**B. Never an older, a foreign or an overwritten list.**
+1. The daemon answers the rows with their archive, their session's id and its generation,
+   all read in one snapshot of the file.
+2. An answer, of the list or of one contact, is drawn only if the page was bound to that
+   archive when the read was sent, and is still bound to it and showing that session at
+   that generation when the answer arrives. Anything else is dropped and the page reads
+   again. A session that New and then Continue have brought back is at a new generation:
+   its rows are read again, not kept.
+3. **A list read does not undo what happened while it was out.** Shown in each order, with
+   the held answer released last:
+   - the read is held; a contact joins and is drawn from its event: the contact is still
+     there;
+   - the read is held; the event stream breaks; a contact is deleted while it is down; the
+     stream reopens and the rows are read and drawn: the deleted row does not come back. A
+     read sent on an earlier connection is never drawn after a later one's.
+4. **A read of one contact does not undo a later one.** Shown in each order, the older
+   answer released last:
+   - the contact is deleted and leaves the panel: the row does not return;
+   - the contact is edited twice: the panel keeps the second edit.
+5. After New, Continue, a default change or an archive switch seen by event, the panel is
+   the new session's: no row of the session before it stays, even for a moment after the
+   new state is drawn. An answer to the in-place edit that returns after the session has
+   changed is not written into the new session's panel.
+6. When the event stream reopens, the state and the rows are read again.
+7. A read that fails takes away nothing already drawn and is retried at the next event or
+   reopening of the stream. If no rows have been drawn for the session shown, the panel says
+   it could not read them. It never shows "No QSOs logged this session" for a read that
+   failed.
+8. The lists a window kept are gone: nothing reads or writes `sm.session.qsos.*` or
+   `sm.session.startedAt`, and what an earlier build left there is removed, not shown.
+9. **A contact event is acted on only from a connection whose archive the page has
+   proven.** An event that arrives while the page is still confirming which archive a
+   reconnected daemon serves changes nothing in the panel: it cannot remove or alter a row
+   of the archive on screen that happens to share its UUID.
+
+Overlapping reads of the list are made as one, and only the session shown is read: that is
+for the build, and is said here so that B3's "read again" is not taken to mean a read for
+every event.
+
+**C. The states.**
+1. `open`: the rows, the session's start, the controls.
+2. `none` (no session open: a start step that failed, or a running app before its first
+   contact after a failed reopen): the panel says no session is open, with no rows and the
+   count at 0; a contact then opens one and the panel becomes that session's.
+3. `setup_pending`: today's first-run card; the panel is not reached.
+4. `recovery_pending`: part 4's question, in place of the workspace.
+5. `archive_switching`: after a switch that has closed the session and asked for the
+   restart, the panel says the archive is being switched and shows no rows and no controls
+   (owed by part 3), until the daemon's restart reloads the page.
+6. **A switch that fails after its close** is judged on what the operator is left with, not
+   on a frame in between: the page may never have drawn `archive_switching` for it. The
+   panel ends on the session the daemon opened for the running app, empty, with the session
+   the switch closed in Continue's list if it had a contact; and no restart was needed to
+   get there. If that reopening failed too, the panel ends on `none` (C2) until the app's
+   next admission opens a session.
+
+**D. The clock.**
+1. It shows the time since `sitting_started_at` of the open session, to the second.
+2. A reload and a daemon restart do not change what it shows. A second window would show
+   the same.
+3. New and Continue (from the panel, and as the recovery answer) start it again at zero.
+4. With no session open it shows no time (question 4). It never counts from the window's
+   load.
+
+**E. New.**
+1. Pressing New closes the current session and opens a new one. The panel empties, the
+   counts read 0, the clock restarts, and the session's start is now.
+2. The session closed is kept if it has a contact and offered in Continue's list; an empty
+   one is discarded and is not.
+3. It is sent at the generation of the state shown. A stale refusal (another window, or a
+   retry after a lost answer) changes nothing and the panel redraws to the state returned;
+   the page sends nothing again by itself (ADR 0100 §5). When the answer is lost, the page
+   says so and reads the state; if the New had been applied the panel shows the new session
+   and no second one is opened by anything the page does.
+4. It is offered only where it can act: not in `recovery_pending`, `setup_pending` or
+   `archive_switching`. A refusal the daemon gives for those is shown in its words.
+5. It does not stop FT8, disarm TX or move a contact (part 4, B11). A run crosses it: the
+   run's next contact joins the new session.
+
+**F. Continue.**
+1. The list is the closed sessions of the default logbook in this archive, ordered by the
+   start of each one's latest sitting, the most recent first, with the session's id deciding
+   between equal starts. The current session is not in it. With none to offer the control is
+   not shown.
+2. Each line gives the session's dates and its count of contacts that are not deleted, and
+   says so when the end of any of its sittings was not confirmed, the last one or an earlier
+   one. No end time is made up for a sitting that has none.
+3. A session whose only contact has been deleted is still a session: it shows 0 contacts,
+   was kept when New closed it, and can be continued.
+4. Choosing one closes the current session (kept if it has a contact, deleted or not;
+   discarded if it has none) and reopens the chosen one. The panel shows the chosen
+   session's contacts, the clock restarts and the next contact joins it.
+5. Contacts do not move: those of the session just left stay in it, and it is in the list.
+   The panel says so beside the control.
+6. **A choice is bound to the list the operator saw:** it is sent with that list's archive
+   and generation. If anything else has changed the session while the list was open, the
+   choice is refused as stale, nothing is continued, and the panel and the list are drawn
+   again from what the daemon holds. A choice is never sent again against a newer
+   generation.
+7. A target that has become ineligible (another logbook is now the default; it is now the
+   current session; it is not there) is refused and the list is read again. A lost answer
+   is treated as New's is.
+8. **What a refused or failed Continue leaves is what the daemon says, and the page draws
+   it.** The current session is still open, with its rows, when the database rolled the
+   Continue back, or when the target was ineligible and nothing else had changed. A stale
+   refusal can come with another state: the test for a changed default runs first and its
+   close is kept (ADR 0100 §5: a refusal is not a rollback), so the state returned can be
+   `none`. The page draws the state returned, whatever it is. The same holds for New.
+9. Shown after an X to Y to X default change: the continued session takes the next contact
+   and stays open (ADR 0100 §8's acceptance, at the routes in part 1; here through the
+   panel).
+
+**G. Part 5 is connected.**
+1. The daemon's ordinary start connects the membership and the wait
+   (`ConnectSessionMembership`). The guard that nothing in production calls it is changed
+   to name the one caller.
+2. Through a real daemon as it starts: a Phone/CW contact and an FT8 completion each join;
+   the next start after a kill asks; a start after a confirmed exit does not.
+3. The two desktop scenarios stop writing the member row themselves and assert the row the
+   submit wrote (owed since part 5).
+4. The canonical documents say what the station now does (`docs/v2-design/api-endpoints.md`,
+   and the page's and the lifecycle's where they describe the Session). The new reads and
+   the event's new field are documented with the slice that first ships them.
+
+**H. The install.**
+1. A page already open when the daemon is replaced is not replaced with it: a daemon
+   restart on the same archive and default reloads nothing today. Until that window is
+   reloaded or the app is closed and opened again, it draws its own list while the new
+   daemon keeps the session. Nothing is lost in that time and no contact is refused; the
+   two can disagree, which is what the brief ruled out at the station.
+2. How that window comes to the new page is question 9. Whichever is ruled is shown by a
+   test of the upgrade itself: a window with a row an earlier build left in its storage; the
+   daemon replaced; a contact logged through another connection afterwards. The test says
+   when the operator gets the new panel, and that it then shows that one contact and not the
+   row left in storage.
+3. The same upgrade, closed normally and killed: after a normal close the next start asks
+   nothing; after a kill with a contact in the session it asks once (the brief's upgrade
+   scenario, restated in part 5).
+
+**Not in part 6.** The Map (part 7). Session email and export naming the session and
+refusing non-members (part 8). The FT8 repeat hold's verdict, and the retirement of
+`sm.ft8.engaged` (part 9). A second window (W-0027 A2): what is built must be right for one,
+and nothing here assumes there is only one. Deleting a session with contacts, and adding or
+removing a member (ADR 0100, O2).
+
+**What the daemon needs, proposed, for review** (Codex supports the event and the single
+cutover, codex-266).
+- A read of the open session's contacts for the panel: the rows in the panel's columns,
+  with the archive, the session's id and its generation, all from one snapshot (B1).
+- A read of one contact of that session, in the same shape.
+- A list of closed sessions for Continue, with its archive and generation (F1, F6).
+- **`qso.stored` names the session the contact joined, from the contact's own
+  transaction.** The logging step already returns it; the service passes it to the event it
+  already publishes after the commit. It is left out for a contact that joined none, and
+  nothing is published for a contact that was rolled back. It is never looked up after the
+  commit. Shown with New winning between the commit and the publication: the event names
+  the session the contact is in, not the one then open. And shown for the first contact,
+  which opens a session: its `qso.stored` is published before the
+  `operating_session.changed` for that session, so the page meets a contact of a session it
+  does not yet show, and must read the state and the rows, neither adding the row to the
+  wrong session nor losing it.
+- Bulk import and restore publish as they do today and name no session.
+- Nothing new to store, and no migration.
+
+**How it will be shown.** Tests first, each seen to fail. The daemon's new reads and the
+event at the routes and through a real daemon. The page in its own tests, with the daemon's
+answers as fixtures chosen so that the window's own list and the daemon's differ (the
+nearest confusable outcome). The desktop app in scenarios against a real daemon: a contact
+logged in the app is in the panel and is still there after a reload; New; Continue; and the
+two existing scenarios without their own member rows. Reversion proofs in temporary copies.
+Timing-sensitive tests are run with every core busy before a push (the lesson of
+`301437e3`). The test that puts New between a contact's commit and its publication stands
+at the "QSO stored" log line, with a log writer of that fixture's own: the test logger
+holds its lock while it writes, so a New that logged through the same writer would wait
+for itself (Codex, codex-267). No transmission, keyed test or rig command.
+
+**Proposed slices.**
+1. *The daemon's reads and the event's fact,* unconnected and unused, documented in the
+   HTTP reference: nothing changes at the station. (If question 9 is ruled that way, the
+   page's check of the daemon's build goes here too, so that it is at the station before the
+   cutover is installed.)
+2. *The cutover:* the panel, the rail, the edit, the export's rows, Band Activity's check
+   and the clock read the daemon; the window's lists are retired; the daemon's start
+   connects part 5; the desktop scenarios. This is the change at the station, and it is one
+   commit: the page reading the daemon while the membership is unconnected would show an
+   empty panel, and the membership connected while the page draws its own list is what the
+   brief ruled out.
+3. *The controls:* New, and Continue with its list.
+
+**Questions for the operator. All nine ruled 2026-11-25, each as recommended (Rulings,
+above): 9 as (a).**
+1. **Where the session's start is shown, and in what words.** I recommend a line in the
+   panel's header, beside the count: "Started 09:15 UTC", with the date when it is not
+   today's (UTC). For a session that was continued, it is the session's first start, and
+   the clock counts the current sitting; the two can then differ by days.
+2. **Does New ask before it acts?** I recommend that it does not: nothing is lost, the
+   session it closes is in Continue's list, and a confirmation on a control used at the
+   start of a sitting is a click with no decision in it. The other choice is a confirmation
+   when the current session has contacts.
+3. **Continue's list: how many, and what each line says.** I recommend the 20 most recent,
+   with "Show more" for the rest; each line "2026-11-20 09:15 to 11:42 UTC · 37 contacts",
+   with no end time where the last sitting has none, and the words "an end not confirmed"
+   when any sitting of that session ended without a confirmed exit. The words beside the
+   control: "Contacts stay in the session they were logged in."
+4. **The clock with no session open.** I recommend it shows nothing (the header keeps its
+   place for it), not zeros and not a count from the window's load.
+5. **A very long session.** The panel shows every row today. I recommend it keeps doing so
+   and that the daemon's read is not capped: a contest weekend is a few thousand rows, read
+   once at a load. The other choice is the newest N with the count for the rest; then a
+   contact beyond N must still count for Band Activity's worked check and still be offered
+   for export and email, so the limit would be on what is drawn and not on what is read
+   (Codex, codex-266).
+6. **The "already emailed" mark in the Export dialog.** Today the window sets it itself and
+   loses it when it closes. I recommend that from this part it comes from the contact's own
+   record (`sm_fwrd_by_email_status`), since the rows are now the daemon's; part 8 then only
+   changes the routes. The other choice is to leave the mark as it is until part 8. ADR
+   0100 §7 already makes the record the source in the end; the question is only when. If it
+   is now, two things come with it (Codex, codex-266): a send that stamped some contacts and
+   not others must show exactly those; and the email route publishes no event when it
+   stamps a contact, so a second reader would not hear of it. It would have to.
+7. **May the station run the cutover (slice 2) before the controls (slice 3) are built?**
+   It would have the daemon's Session and the recovery question, with no New and no Continue
+   from a list for that time. I recommend yes, as a deploy you choose: the cutover is the
+   part that needs time at the station, and the controls add to it without changing it.
+8. **The helper that adds contacts by hand** (open since part 5). Once this part is at the
+   station, a contact it sends by the live route joins whatever session is open, hours after
+   it was made. Either it moves to `smctl import` (the daemon stops for the import; nothing
+   is forwarded unless asked; no session is joined), or it stays as it is. I recommend the
+   import for a contact made at another time, and I have changed nothing.
+9. **An app left open while the new build is installed** (H).
+   (a) The app is closed normally before the install and opened after it. Nothing is built;
+   it is a step of this install. It also starts the new desktop program, which an open app
+   does not get either.
+   (b) The page reloads itself when the daemon it reconnects to is another build than the
+   one that served it. This helps only a window that already has the check: it does nothing
+   for the window open at this install, and would serve later ones.
+   I recommend (a), as Codex does (codex-267), and nothing built for (b) now: one stated
+   step covers the one install where it matters, and (b) is machinery against something
+   that step already prevents. If (b) is wanted later, its tests would include an upgrade
+   that skips a build and a reload the operator declines at the unsaved-Settings prompt.
+
+### Part 6, slice 1: the daemon's reads and the event's fact (built 2026-11-25; uncommitted when written)
+
+The first slice of part 6's criteria ("What the daemon needs"). **Nothing here changes what
+the station does:** no page calls the new routes, and while the membership is unconnected
+no session has a contact and no `qso.stored` names a session. The one thing a deployment
+would change is small and stands by itself: a contact stamped as forwarded by email is now
+announced as `qso.updated`.
+
+**What was built.**
+- **Three reads of the session's record** (`internal/database/sqlite/operating_session_read.go`),
+  each one read transaction, so one snapshot: the open session's contacts that are not
+  deleted, the newest stored first, with the session's id and the generation; one contact
+  of it by its UUID, or no row when it is not a member that is shown; and Continue's list,
+  the closed sessions of the default logbook by the start of each one's latest sitting,
+  the later id first among equal starts, cut at a limit and saying whether there are more.
+  A contact that cannot be read fails the answer: a list with a row left out would be drawn
+  as the whole session.
+- **Three routes** (`internal/api/operating_session_reads.go`):
+  `GET /v1/operating-session/members`, `/members/{uuid}` and `/closed`. Each names the
+  served archive with the generation, and the two contact reads the session's id. A row is
+  the panel's columns with the contact's edit counter (`revision`, ADR 0050), which is what
+  orders two answers about one contact, and `emailed`, from the contact's own record
+  (ruling 6). They do not take the admission's order, so none can wait behind an app's
+  start. A read that fails is 503 and never an empty list.
+- **`qso.stored` names the session** (`operating_session_id`): the logging step's own
+  answer is passed from the contact's transaction to the event. It is left out for a
+  contact that joined none.
+- **A stamp is announced** (`internal/api/handler_session_email.go`): the email route
+  publishes `qso.updated` for each contact a confirmed commit stamped, and for no other
+  (ruling 6).
+- **The HTTP reference** documents the routes, the event's field and the announcement.
+
+**How it is shown.**
+- The reads: `internal/database/sqlite/operating_session_read_test.go`. Who is in the list
+  and who is not (a deleted member, a contact of an earlier session, of another logbook,
+  and one stored with no logging step); the order; no session open; the list of closed
+  sessions against a fixture with a session continued once, one ended unconfirmed, and one
+  whose only contact is deleted; a session placed by its latest sitting and not its first
+  start; equal starts; the limit; the default logbook only.
+- **One snapshot, deterministically.** A seam for tests runs inside each read between its
+  first read of the file and its next. There a contact joins, New closes the session and
+  the new one takes a contact; the answer must be of the moment the read began. My first
+  test of this ran a writer beside the reads and hoped to meet the window: a read made of
+  two snapshots passed it (found by the reversion), so it was replaced.
+- The event: `internal/qsoservice/session_membership_test.go`. The session named for a
+  plain join and for the contact that opens one; none for a deliberate submit, another
+  logbook, an import and an unconnected service; the first contact's `qso.stored` before
+  that session's change; and New run between a contact's commit and its publication, at the
+  "QSO stored" log line with a log writer of the fixture's own: the event names the session
+  the contact is in, not the one then open.
+- The routes: `internal/api/session_panel_reads_test.go`, through the app listener; with
+  the admission's order held; on a file that cannot be read.
+- The announcement: one `qso.updated` for the contact stamped when a second contact in the
+  same send is not.
+- **Proved by reversion** (a temporary copy, nineteen cases): each filter, order and count
+  of the reads undone; each read made outside its snapshot; the event's session looked up
+  after the commit; a read waiting for the admission's order; a failed read answered as an
+  empty list; a row that never reads as emailed; every contact sent announced.
+- **Under load:** the slice's tests of the three packages, 120 runs each with every core
+  busy: no failure.
+
+**The guard on the source changed with it.** The member table may now be named by the reads
+as well as by the record, and is still written in exactly one statement in the whole tree.
+
+**Not built.** The cutover (the page's readers, the clock, the connection, the desktop
+scenarios) and the controls. Nothing in the app calls any of this yet.

@@ -17,8 +17,9 @@ import (
    pieces at all. Each is an allow-list of files, not a search for a known bad
    shape, so a new use anywhere fails here and is looked at.
 
-     - the member table is named in production Go by the session's record
-       alone, which writes it in exactly one statement: the logging step's;
+     - the member table is named in production Go by the session's record and
+       by the reads beside it (part 6), and is WRITTEN in exactly one statement
+       in the whole tree: the logging step's;
      - no migration puts a row into it (B5);
      - the logging step is called from this package's submit alone;
      - a live submit is made by the submit route and the FT8 completion sink
@@ -83,6 +84,7 @@ func TestSource_TheMembershipIsNamedOnlyWhereItIsAllowed(t *testing.T) {
 	files := productionGo(t)
 	const (
 		record  = "internal/database/sqlite/operating_session.go"
+		reads   = "internal/database/sqlite/operating_session_read.go"
 		step    = "internal/qsoservice/session_membership.go"
 		submit  = "internal/qsoservice/submit.go"
 		route   = "internal/api/handler_qso.go"
@@ -94,7 +96,7 @@ func TestSource_TheMembershipIsNamedOnlyWhereItIsAllowed(t *testing.T) {
 		name string
 		want []string
 	}{
-		{"the member table", `\boperating_session_member\b`, []string{record}},
+		{"the member table", `\boperating_session_member\b`, []string{record, reads}},
 		{"the logging step", `\bJoinOperatingSessionTx\b`, []string{record, step}},
 		{"a live submit", `\bSubmitLive\b`, []string{sink, route, step, submit}},
 		{"setting the membership", `\bSetSessionMembership\b`, []string{connect, step, submit}},
@@ -107,10 +109,19 @@ func TestSource_TheMembershipIsNamedOnlyWhereItIsAllowed(t *testing.T) {
 		}
 	}
 
-	// The record writes the member table once, and never changes or removes a row.
+	// The member table is written once in the whole tree, by the record, and no
+	// row of it is ever changed or removed.
 	writes := regexp.MustCompile(`(?i)\b(insert(\s+or\s+\w+)?\s+into|replace\s+into|update|delete\s+from)\s+operating_session_member\b`)
-	if got := writes.FindAllString(files[record], -1); len(got) != 1 || !strings.HasPrefix(strings.ToUpper(got[0]), "INSERT INTO") {
-		t.Errorf("the session's record writes the member table as %q; want one INSERT, the logging step's", got)
+	for name, src := range files {
+		got := writes.FindAllString(src, -1)
+		switch {
+		case name == record:
+			if len(got) != 1 || !strings.HasPrefix(strings.ToUpper(got[0]), "INSERT INTO") {
+				t.Errorf("the session's record writes the member table as %q; want one INSERT, the logging step's", got)
+			}
+		case len(got) != 0:
+			t.Errorf("%s writes the member table: %q", name, got)
+		}
 	}
 
 	// Connecting is declared once and called by nothing in production.
