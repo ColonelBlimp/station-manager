@@ -68,7 +68,7 @@ func (b *setupBed) count(q string, args ...any) int {
 // not have.
 func (b *setupBed) admit(lifetime string) {
 	b.t.Helper()
-	gen, _ := b.srv.admission.read(lifetime)
+	gen, _, _ := b.srv.admission.read(context.Background(), lifetime)
 	if _, err := b.srv.admission.admit(lifetime, processInstance, gen); err != nil {
 		b.t.Fatalf("admit %q: %v", lifetime, err)
 	}

@@ -82,7 +82,7 @@ func prepareApp(t testing.TB, srv *Server) {
 		srv.appPort = testAppPort
 	}
 	srv.appMu.Unlock()
-	generation, current := srv.admission.read(testAppLifetime)
+	generation, current, _ := srv.admission.read(context.Background(), testAppLifetime)
 	if !current {
 		if _, err := srv.admission.admit(testAppLifetime, processInstance, generation); err != nil {
 			t.Fatalf("admit the fixture app: %v", err)

@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's review of it found no fault in the code and two in its tests (codex-259), both corrected (the last section; uncommitted when written). Its second slice, the admission's wait and the drains, is not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built. Part 5 stays unconnected until part 6.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -269,6 +269,8 @@ next part starts.
   scenario that the clean-room review of `ef9b8968` called for, said after Codex closed
   its review of it (codex-231).
 - **2026-11-24 (operator): "start on part 5".** The criteria first, as for parts 1 to 4.
+- **2026-11-25 (operator): "slice 2 of part 5".** The second slice as proposed: the
+  admission's wait and the drains (E, H).
 - **2026-11-25 (operator): "slice 1 of part 5".** The first slice as proposed in part 5's
   criteria: the step in the submit's transaction, with the classification, the holder and
   the event (A to D, F, G).
@@ -4929,3 +4931,121 @@ new tests fail,** both corrected:
 source inspection only, as the slice's own section says. The busy-limit failure is now
 stated in C4 itself (above). Whether a contact that meets the busy limit should be tried
 again is not decided.
+
+### Part 5, slice 2: the wait before a leftover session is judged, and the drains (built 2026-11-25; uncommitted when written)
+
+Directed by the operator, 2026-11-25: "slice 2 of part 5". Criteria E and H. **Nothing here
+changes what the station does:** the wait is connected by the same function as the
+membership, which the daemon's ordinary start does not call (question 1).
+
+**What it is for.** An app's start throws away a leftover session that has no contact. A
+contact the earlier app earned on the air can still be on its way to the file at that
+moment. Without a wait the leftover session would be discarded and the contact would then
+open a session of its own, held by the new app, and the operator would never be asked about
+the sitting it belonged to. With it, the start waits until that contact is stored: the
+leftover session has the contact, is kept, and the operator is asked Continue or New.
+
+**What was built** (`internal/api/app_admission.go`, `operating_session.go`).
+- `appAdmission.awaitBeforeStart`: the wait, made with the admission's order held, by the
+  two admissions that start a session, each with the scopes already stopped: a first
+  admission or a replacement (`admit`), and the held lifetime admitted again after a failed
+  step (`complete`). It is not in the shared start step, which a failed switch also calls,
+  and it is skipped in the closing phase of a switch, where no session is started.
+- What it waits for is the drain a confirmed exit and an archive switch already use
+  (`Server.SetCompletionDrain`; the daemon's `drainFt8Completions`: the hand-over, then every
+  tracked job). It cancels nothing and has no limit of its own (question 2).
+- `ConnectSessionMembership` gives the admission that wait. Until it is called no admission
+  waits.
+- H needed no new code: the drains were built in parts 2 and 3, and slice 1 made a contact
+  stored by one a member. This slice shows it.
+
+**What the operator will see, once part 6 connects it.** After a crash or a kill with an FT8
+contact still being logged, the next start stays on its waiting page until the contact is
+stored, and then asks Continue or New with that contact counted. While it waits the page's
+own reads of the admission and of the session wait too, since they take the same order.
+
+**How each criterion is shown.**
+- E1, E5, and the unconnected server: `internal/api/session_membership_wait_test.go`. Each
+  wait records what was true inside it: the scopes already retired, no session yet opened
+  or judged, the earlier app still held. The repeat of the current app, an admission in the
+  closing phase and a failed switch's session are shown not to wait.
+- E4, E6, E7: the same file, with work the test puts in the drain, and through a real daemon
+  (`cmd/smd/session_membership_test.go`): a real completion job held at the archive's write
+  lock, the next app's admission seen parked in the daemon's own drain and answering
+  nothing, then, once the contact is stored, a successful admission, `recovery_pending` for
+  the new app, the contact's member row naming the leftover session, and one session in the
+  file. A second try of the same start, made while the first waits, is seen waiting behind
+  it and starts nothing: one admission, the same leftover session.
+- H: at the routes with work put in the drain, and through the daemon with real jobs. A
+  switch: an FT8 contact stored by its drain, and a Phone/CW contact admitted before its
+  seal, are in the session it closes as `archive_switched`, which is kept. An exit by the
+  session's holder: the contact is in the session closed as `app_closed`. An exit while a
+  recovery is pending: the contact joins the other app's session, which stays open and
+  stays that app's. An exit made stale by its own drain (the exiting app held no session,
+  so the contact opened one): answered stale with the new generation, then repeated, and
+  the contact is in the session the repeat closes.
+- Guards on the source: the wait is given to the admission in one place and made in one
+  place, which only the two admissions call.
+- **Proved by reversion** (a temporary copy, twelve cases): no wait in an admission, or in
+  the held lifetime's; the wait after the start step, before the scopes are retired, in the
+  closing phase, in the shared start step (behaviour and guard); the wait connected without
+  the membership; the ordinary start connecting it; the FT8 sink or the route not live.
+
+**Where the evidence is thinner than the criteria's words, for review.**
+1. **E3, the hand-over.** No new test holds a contact between its slot and its job at an
+   app start. What is shown: the admission is held in the daemon's own drain; that drain's
+   body, hand-over first, is pinned by `completion_drain_source_test.go`; and
+   `internal/ft8`'s own test shows the hand-over wait after operation is stopped. This is
+   the evidence part 3 accepted for the switch.
+2. **E7, the shell.** The shell's files were read, not run: its five-second limit and its
+   retry are taken from `desktop/src/admission.mjs` and `waiting.mjs`. What is tested is the
+   daemon's side: requests given up on as the shell gives up on them (below). No desktop
+   scenario runs a start against unfinished logging.
+3. **H's stale exit** is shown at the routes with the test's own work in the drain, not
+   through the daemon: reaching it there needs a switch that fails to reopen.
+
+**Found by Codex's reviews of this slice (codex-261, codex-262), and corrected: a read the
+shell gave up on went on waiting inside the daemon.** While a start waits, the shell gives
+up on a request after five seconds and asks again: with a read of the admission, and, if the
+operator closes the window that is still waiting, with a read of the session. Both reads
+take the admission's order, which the waiting start holds.
+- *The first form of the fault:* each read waited in its handler, and a handler keeps one of
+  the daemon's request slots (128 by default) until it returns, whether or not its caller
+  is still there. A wait long enough would have filled the slots with reads nobody wanted,
+  and a request with no part in the start, a contact being logged included, would have been
+  refused as `server_busy`: a contact refused for a session's sake, which C2 forbids.
+- *My first correction* moved the admission's read to a goroutine of its own, so the handler
+  could return. Codex showed that the goroutine still waited for the order until the start
+  ended, one for every read given up on and outside the request limit; and that the
+  session's read had the first fault unchanged.
+- *What is built:* the two reads take the order with `appAdmission.lockUnlessGone`, which
+  tries for it and, while the caller is there, tries again every two milliseconds. A read
+  that gets the order has what it had before: one snapshot, ordered with every admission
+  and exit. A read whose caller has gone returns at once, answers nothing and leaves
+  nothing waiting; and a free order is never taken for a caller already gone, so no read
+  runs with a cancelled request and fails in the database as if the file were at fault
+  (codex-263). The cost: a waiting read is not queued with the writers, can be passed by
+  them, and has no promised time. Everything that changes the admission or the session still takes the
+  order without giving up, and is not abandoned with its caller: a guard on the source
+  holds that to the two reads.
+- *Shown,* with cancellation in place of the five seconds and the slots read from the
+  limiter: the admit reaches the wait and is given up on (one slot, the admission's, which
+  goes on working); a read of the admission, then a read of the session, is each seen
+  waiting for the order (two slots) and given up on (one again, and no goroutine but the
+  admission's still waits for or holds the order), all with the start's wait still held;
+  then the contact is stored, the slots are free, the same app's next read says current
+  after one admission, and the contact is in the leftover session. Four reversions: either
+  read waiting without giving up, a read that gives up but leaves its wait behind, and an
+  admission made able to give up (the guard).
+- **Not changed:** an exit report and setup's save take the same order and are not given
+  up, by design: they change things. A caller that abandons one keeps a slot until it has
+  run. The shell sends neither while its own start is unanswered.
+
+**Gates.** The membership tests of the API and the daemon five times each on one CPU and on
+four under the race detector: exit 0. gofmt, `go vet ./...`, the maintainability gate:
+clean. The whole local CI: run before any commit.
+
+**Part 5's criteria are built. Owed at part 6:** the call that connects the membership and
+the wait; the two desktop scenarios' own member rows (above); the canonical documents
+(`docs/v2-design/`), which describe what the station does and so wait for the connection.
+Not decided: a retry at SQLite's busy limit; the hand-add helper's route.

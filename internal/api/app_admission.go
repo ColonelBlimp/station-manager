@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
@@ -157,6 +158,12 @@ type appAdmission struct {
 	// from the switch's close of the session until the switch fails or the
 	// process ends. No session is opened in it.
 	closing bool
+	// awaitEarned waits for FT8 completion logging already earned: the wait a
+	// confirmed exit and an archive switch use (Server.SetCompletionDrain). It
+	// is called under mu by the admissions that start a session (awaitBeforeStart).
+	// Nil until the session membership is connected (operating_session.go, the
+	// one function that connects it): then no admission waits.
+	awaitEarned func()
 
 	// published is the generation as last published, for the response header. It is read
 	// without mu, so a request is never held up behind a replacement that is stopping a
@@ -196,10 +203,93 @@ func (a *appAdmission) holding() string {
 // lifetime the admission still holds included: the app stops at a read that
 // says "current" and sends no admit (desktop/src/admission.mjs), and it is the
 // admit that completes what the failure left undone.
-func (a *appAdmission) read(lifetime string) (generation uint64, current bool) {
-	a.mu.Lock()
+//
+// answered is false when the caller went away while the read waited for the
+// admission's order (lockUnlessGone): then nothing was read.
+func (a *appAdmission) read(ctx context.Context, lifetime string) (generation uint64, current, answered bool) {
+	if !a.lockUnlessGone(ctx) {
+		return 0, false, false
+	}
 	defer a.mu.Unlock()
-	return a.generation, lifetime != "" && lifetime == a.current && !a.stopped
+	return a.generation, lifetime != "" && lifetime == a.current && !a.stopped, true
+}
+
+// orderPoll is the interval at which a read that waits for the admission's
+// order tries for it again. It is when the read looks, not how soon it is
+// answered: see lockUnlessGone.
+const orderPoll = 2 * time.Millisecond
+
+// lockUnlessGone takes the admission's order for a READ, and gives up when the
+// caller has gone. It reports whether mu is now held.
+//
+// An admission can hold the order for as long as earned logging takes to
+// finish (awaitBeforeStart), and so can an exit. The shell gives up on a
+// request after five seconds and asks again: the read of the admission when a
+// start has not been answered, and the read of the session when the operator
+// closes a window that is still waiting (desktop/src/admission.mjs,
+// closing.mjs). A read that waited with Lock would keep its handler, and with
+// it one of the daemon's request slots, until the wait ended, whether or not
+// anyone was listening. A long wait would fill the slots with reads nobody
+// wants, and a request with no part in the start, a contact being logged
+// included, would be refused as server_busy (the reviews of W-0029 part 5,
+// slice 2: codex-261, codex-262).
+//
+// A mutex's Lock cannot be given up, so the read tries for the order and, while
+// its caller is there, tries again at each orderPoll. A read that gets the
+// order has exactly what Lock would have given it: one snapshot, ordered with
+// every admission and exit. The cost is that a waiting read is not queued with
+// the writers that use Lock. It has no promised time: a writer can take the
+// order between two of its tries and hold it past the next, and it is then
+// passed again.
+//
+// It is for the two reads only. Everything that changes the admission or the
+// session takes the order with Lock, and is not abandoned with its caller.
+func (a *appAdmission) lockUnlessGone(ctx context.Context) bool {
+	if a.tryForRead(ctx) {
+		return true
+	}
+	again := time.NewTicker(orderPoll)
+	defer again.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-again.C:
+			if a.tryForRead(ctx) {
+				return true
+			}
+		}
+	}
+}
+
+// tryForRead takes the order if it is free and the caller is still there, and
+// reports whether mu is held. The caller is looked at after the order is
+// taken, every time: a free order must not be taken for a request that is
+// already over, at the first try or at a tick that came due together with the
+// cancellation. The read would then run with a cancelled context, and the
+// session's would fail in the database, be logged as the file's fault, and
+// answer 503 to nobody (the review of W-0029 part 5, slice 2: codex-263).
+func (a *appAdmission) tryForRead(ctx context.Context) bool {
+	if !a.mu.TryLock() {
+		return false
+	}
+	if ctx.Err() != nil {
+		a.mu.Unlock()
+		return false
+	}
+	return true
+}
+
+// observeUnlessGone is observe for a read whose caller may give up: it reports
+// false, having run nothing, when the caller went away while it waited for the
+// order (lockUnlessGone).
+func (a *appAdmission) observeUnlessGone(ctx context.Context, fn func(current string)) bool {
+	if !a.lockUnlessGone(ctx) {
+		return false
+	}
+	defer a.mu.Unlock()
+	fn(a.current)
+	return true
 }
 
 // admit applies the rule at the head of this file and returns the generation after it.
@@ -232,6 +322,7 @@ func (a *appAdmission) admit(lifetime, instance string, generation uint64) (uint
 	// happens, and the scopes stay stopped until an admission succeeds.
 	a.stopped = true
 	if readErr == nil {
+		a.awaitBeforeStart()
 		readErr = a.startSession(lifetime)
 	}
 	if readErr != nil {
@@ -267,6 +358,7 @@ func (a *appAdmission) complete(lifetime string) error {
 	if !a.stopped {
 		return nil
 	}
+	a.awaitBeforeStart()
 	if err := a.startSession(lifetime); err != nil {
 		return err
 	}
@@ -286,6 +378,34 @@ func (a *appAdmission) exitRecorded(lifetime string) (bool, error) {
 		return false, stderr.Join(errSessionUnavailable, err)
 	}
 	return exited, nil
+}
+
+// awaitBeforeStart is the wait before a leftover session is judged empty
+// (W-0029 part 5, E). The start step discards an open session that has no
+// contact and belongs to another lifetime. A contact an earlier app earned on
+// the air can still be on its way to the file when the next app starts: its
+// scopes are stopped by now, so nothing new is earned, but its logging job may
+// not have written. That job is waited for here, so the contact is in the
+// leftover session before the session is judged, and the session is kept and
+// asked about instead of thrown away with the contact left to open another.
+//
+// It is called by the admissions that start a session, each with the scopes
+// already stopped: a first admission or a replacement (admit), and the held
+// lifetime admitted again after a failed step (complete). It is NOT in
+// startSession: a failed archive switch calls that too (SwitchSession.Failed),
+// after its seals are released and with the scopes running. In the closing
+// phase of a switch no session is started, so nothing is waited for.
+//
+// The wait cancels nothing and has no limit of its own (operator ruling
+// 2026-11-24): the app stays on its waiting page until the logging has
+// finished. It runs with mu held, as the exit's does. That is safe because
+// logging takes no lock of the admission's, before its commit or after
+// (W-0029 part 5, C5).
+func (a *appAdmission) awaitBeforeStart() {
+	if a.awaitEarned == nil || a.closing {
+		return
+	}
+	a.awaitEarned()
 }
 
 // startSession is the session's start step. In the closing phase of an archive
@@ -334,11 +454,15 @@ func (s *Server) registerAppAdmission(apiMux *routeMux) {
 }
 
 // handleAppLifetimeRead answers the read: this process's marker, the admission
-// generation, and whether the caller is the current lifetime.
+// generation, and whether the caller is the current lifetime. A caller that
+// has gone while the read waited for the admission's order is answered
+// nothing (appAdmission.lockUnlessGone).
 func (s *Server) handleAppLifetimeRead(w http.ResponseWriter, r *http.Request) {
 	st := appLifetimeState{Instance: processInstance}
-	st.Generation, st.Current = s.admission.read(appLifetime(r))
-	s.writeJSON(w, http.StatusOK, st)
+	var answered bool
+	if st.Generation, st.Current, answered = s.admission.read(r.Context(), appLifetime(r)); answered {
+		s.writeJSON(w, http.StatusOK, st)
+	}
 }
 
 // handleAppLifetimeAdmit admits the caller's lifetime against what it read.

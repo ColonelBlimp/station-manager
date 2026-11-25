@@ -131,8 +131,10 @@ func (s *Server) publishSessionGeneration(generation int64) {
 // ConnectSessionMembership connects live logging to the operating session
 // (ADR 0100 §2; W-0029 part 5): from here a contact logged while operating
 // joins the open session in its own transaction, a session it has to open is
-// held by the lifetime the admission publishes, and a generation it advances
-// is published as every other advance is.
+// held by the lifetime the admission publishes, a generation it advances is
+// published as every other advance is, and an app's start waits for FT8
+// completion logging already earned before it judges a leftover session empty
+// (appAdmission.awaitBeforeStart).
 //
 // IT IS NOT CALLED BY THE DAEMON'S ORDINARY START (operator ruling 2026-11-24,
 // part 5's question 1). Membership reaches the station with part 6, whose
@@ -145,6 +147,17 @@ func (s *Server) ConnectSessionMembership() {
 		Advanced: s.publishSessionGeneration,
 		Now:      s.sessionNow,
 	})
+	a := &s.admission
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// The drain is read when the wait is made, not here: the daemon sets it
+	// (SetCompletionDrain) in its own order, and without one there is nothing
+	// to wait for.
+	a.awaitEarned = func() {
+		if s.completionDrain != nil {
+			s.completionDrain()
+		}
+	}
 }
 
 func (s *Server) registerOperatingSession(apiMux *routeMux) {
@@ -176,7 +189,8 @@ type operatingSessionBody struct {
 // state named from the current lifetime, with the admission's order held
 // across both, so no close and retirement can come between them. It changes
 // nothing, whatever lifetime asks, or none. A record that cannot be read is an
-// error, never an empty session.
+// error, never an empty session. It waits for the order only while its caller
+// is there (appAdmission.lockUnlessGone).
 func (s *Server) handleOperatingSessionRead(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleOperatingSessionRead"
 	caller := appLifetime(r)
@@ -185,7 +199,7 @@ func (s *Server) handleOperatingSessionRead(w http.ResponseWriter, r *http.Reque
 		resp operatingSessionResponse
 		err  error
 	)
-	s.admission.observe(func(current string) {
+	answered := s.admission.observeUnlessGone(r.Context(), func(current string) {
 		if st, err = s.db.OperatingSessionStateWithContext(r.Context(), caller); err != nil {
 			return
 		}
@@ -194,6 +208,11 @@ func (s *Server) handleOperatingSessionRead(w http.ResponseWriter, r *http.Reque
 		}
 		resp = s.sessionResponse(st, caller, current, s.admission.closing)
 	})
+	if !answered {
+		// The caller went away while the read waited for the admission's order:
+		// nothing was read, and there is nobody to answer.
+		return
+	}
 	if err != nil {
 		s.logger.ErrorWith().Err(err).Msg("operating session: the state could not be read")
 		s.writeError(w, http.StatusServiceUnavailable, operatingSessionUnavailable,

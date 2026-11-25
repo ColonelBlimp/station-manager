@@ -675,7 +675,7 @@ func TestSwitchOrder_I2_AnAppStartAgainstASwitch(t *testing.T) {
 		b.contact(t)
 		activation, letGo := b.heldSwitch(t, other)
 
-		w := orderWatch(t, "(*appAdmission).read")
+		w := orderWatch(t, readTakesOrder)
 		start := async(func() (int, []byte) { return b.admit(t, orderLifeB) })
 		parkedAtOrder(w, "the app start, with a switch under way", start)
 

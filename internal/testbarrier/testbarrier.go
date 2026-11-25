@@ -41,6 +41,9 @@ import (
 const (
 	AtMutex     = "sync.Mutex.Lock"
 	AtWaitGroup = "sync.WaitGroup.Wait"
+	// AtSelect is a goroutine waiting in a select statement of the function
+	// named: a wait that can be given up, where a mutex's cannot.
+	AtSelect = "select"
 )
 
 // patience is how long Waiting looks before it gives up. A variable so that the

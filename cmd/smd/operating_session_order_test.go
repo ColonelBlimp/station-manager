@@ -51,8 +51,15 @@ const (
 // anything is already waiting there.
 func orderWatch(t *testing.T, takesOrder string) testbarrier.Watch {
 	t.Helper()
+	if takesOrder == readTakesOrder {
+		return testbarrier.Expect(t, testbarrier.AtSelect, takesOrder)
+	}
 	return testbarrier.Expect(t, testbarrier.AtMutex, takesOrder)
 }
+
+// readTakesOrder is where a read of the admission or of the session waits for
+// the admission's order: where it can be given up on, not at the mutex.
+const readTakesOrder = "(*appAdmission).lockUnlessGone"
 
 // parkedAtOrder: the request behind ch, sent after w was taken, is the one
 // goroutine parked at the admission's lock there, and has answered nothing.

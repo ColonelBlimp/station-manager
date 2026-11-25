@@ -26,7 +26,9 @@ import (
 // arriving behind another operation waits at its read; one whose read was
 // answered before the other began waits at the admit itself. Both are forced.
 const (
-	admissionReadsOrder = "(*appAdmission).read"
+	// A read waits for the order where it can be given up on
+	// (appAdmission.lockUnlessGone), not at the mutex: orderWatch knows.
+	admissionReadsOrder = "(*appAdmission).lockUnlessGone"
 	admissionTakesOrder = "(*appAdmission).admit"
 	exitTakesOrder      = "(*Server).exitOperatingSession"
 	setupTakesOrder     = "(*appAdmission).observe"
@@ -66,6 +68,9 @@ func arrived(t *testing.T, what string, ch <-chan struct{}) {
 // if anything is already waiting there.
 func orderWatch(t *testing.T, takesOrder string) testbarrier.Watch {
 	t.Helper()
+	if takesOrder == admissionReadsOrder {
+		return testbarrier.Expect(t, testbarrier.AtSelect, takesOrder)
+	}
 	return testbarrier.Expect(t, testbarrier.AtMutex, takesOrder)
 }
 
