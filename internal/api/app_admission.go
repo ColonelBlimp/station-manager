@@ -65,6 +65,20 @@ const (
 	appLifetimeBytes = 16
 )
 
+// requestAbandoned is the code a read is answered with when its caller went
+// away while it waited for the admission's order (appAdmission.lockUnlessGone):
+// 503, and nothing was read. A handler that only returned would be given a
+// 200 with no body by the server, and that is what the access log would show
+// and what the caller's own end can be handed in the moment it lets go. Nobody
+// should be able to take an abandoned read for an answer.
+const requestAbandoned = "request_abandoned"
+
+// writeAbandoned answers a read whose caller has gone.
+func (s *Server) writeAbandoned(w http.ResponseWriter, op errors.Op) {
+	s.writeError(w, http.StatusServiceUnavailable, requestAbandoned,
+		"the request was given up before the daemon could answer it; nothing was read", op)
+}
+
 type appLifetimeKey struct{}
 
 // appLifetime is the request's validated app lifetime, or "" when it carried none.
@@ -454,15 +468,17 @@ func (s *Server) registerAppAdmission(apiMux *routeMux) {
 }
 
 // handleAppLifetimeRead answers the read: this process's marker, the admission
-// generation, and whether the caller is the current lifetime. A caller that
-// has gone while the read waited for the admission's order is answered
-// nothing (appAdmission.lockUnlessGone).
+// generation, and whether the caller is the current lifetime. A read whose
+// caller went away while it waited for the admission's order has read nothing
+// and says so (appAdmission.lockUnlessGone; requestAbandoned).
 func (s *Server) handleAppLifetimeRead(w http.ResponseWriter, r *http.Request) {
 	st := appLifetimeState{Instance: processInstance}
 	var answered bool
-	if st.Generation, st.Current, answered = s.admission.read(r.Context(), appLifetime(r)); answered {
-		s.writeJSON(w, http.StatusOK, st)
+	if st.Generation, st.Current, answered = s.admission.read(r.Context(), appLifetime(r)); !answered {
+		s.writeAbandoned(w, "api.handleAppLifetimeRead")
+		return
 	}
+	s.writeJSON(w, http.StatusOK, st)
 }
 
 // handleAppLifetimeAdmit admits the caller's lifetime against what it read.

@@ -4934,9 +4934,13 @@ again is not decided.
 
 ### Part 5, slice 2: the wait before a leftover session is judged, and the drains (built 2026-11-25; uncommitted when written)
 
-Directed by the operator, 2026-11-25: "slice 2 of part 5". Criteria E and H. **Nothing here
-changes what the station does:** the wait is connected by the same function as the
-membership, which the daemon's ordinary start does not call (question 1).
+Directed by the operator, 2026-11-25: "slice 2 of part 5". Criteria E and H. **What a
+deployment of this slice changes at the station is one thing, and it is not the session:**
+the two reads that wait for the admission's order (`GET /v1/app/lifetime`,
+`GET /v1/operating-session`) give up as soon as their caller disconnects, and are then
+answered 503 `request_abandoned` (below). Contact membership and the wait for earned
+logging are connected by `ConnectSessionMembership`, which the daemon's ordinary start does
+not call (question 1): they change nothing until part 6.
 
 **What it is for.** An app's start throws away a leftover session that has no contact. A
 contact the earlier app earned on the air can still be on its way to the file at that
@@ -5022,10 +5026,23 @@ take the admission's order, which the waiting start holds.
   tries for it and, while the caller is there, tries again every two milliseconds. A read
   that gets the order has what it had before: one snapshot, ordered with every admission
   and exit. A read whose caller has gone returns at once, answers nothing and leaves
-  nothing waiting; and a free order is never taken for a caller already gone, so no read
-  runs with a cancelled request and fails in the database as if the file were at fault
-  (codex-263). The cost: a waiting read is not queued with the writers, can be passed by
-  them, and has no promised time. Everything that changes the admission or the session still takes the
+  nothing waiting. A free order is not taken for a caller whose going is already visible
+  when the order is taken, so such a read is not started with a cancelled request
+  (codex-263). That is as far as it goes: a caller can still disconnect during the session
+  read's own database read, which is given the request's context; the read then fails, is
+  logged as a read that failed and is answered 503, as before this slice (codex-265). The
+  cost: a waiting read is not queued with the writers, can be passed by them, and has no
+  promised time.
+- *What a read given up on is answered:* 503 `request_abandoned`, with nothing read. Its
+  handler at first only returned, and the server then answers 200 with no body: that is
+  what the access log would have shown, and what the caller's own end can be handed in the
+  moment it lets go. **The hosted CI failed on `301437e3` for exactly that** (run
+  45576776587): the test took any response to a request it had given up on as an answer,
+  and under load the bare 200 arrived before the client's own error. Reproduced here with
+  every core busy (about one run in fifty), and the response measured: `200 ""`. The
+  handlers now say so, the HTTP reference documents the code, and the test accepts the
+  client's error or that refusal and nothing else. With the same load: 960 runs, no
+  failure. Everything that changes the admission or the session still takes the
   order without giving up, and is not abandoned with its caller: a guard on the source
   holds that to the two reads.
 - *Shown,* with cancellation in place of the five seconds and the slots read from the

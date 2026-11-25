@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -403,16 +404,32 @@ func (b *memberBed) shellRequest(ctx context.Context, lifetime, method, path, bo
 	return r
 }
 
-// sent sends a request in the background and reports the client's own error:
-// what the shell sees of a request it gave up on.
-func (b *memberBed) sent(r *http.Request) <-chan error {
-	ch := make(chan error, 1)
+// shellSaw is the shell's own end of a request: the client's error, or the
+// response it was handed.
+type shellSaw struct {
+	err    error
+	status int
+	body   string
+}
+
+// abandoned is whether what the sender was handed is the daemon's word to a
+// caller that has gone: 503 request_abandoned.
+func (s shellSaw) abandoned() bool {
+	return s.status == http.StatusServiceUnavailable && strings.Contains(s.body, `"code":"`+requestAbandoned+`"`)
+}
+
+// sent sends a request in the background and reports what its sender saw.
+func (b *memberBed) sent(r *http.Request) <-chan shellSaw {
+	ch := make(chan shellSaw, 1)
 	go func() {
 		resp, err := b.c.Do(r)
+		saw := shellSaw{err: err}
 		if resp != nil {
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 			_ = resp.Body.Close()
+			saw.status, saw.body = resp.StatusCode, string(raw)
 		}
-		ch <- err
+		ch <- saw
 	}()
 	return ch
 }
@@ -484,8 +501,8 @@ func TestMembership_Admission_AnAbandonedRetryHoldsNoRequestSlot(t *testing.T) {
 	arrived(t, "the admission to reach its wait", entered)
 	settles("with the admission in its wait", 1)
 	giveUpFirst()
-	if err := finished(t, "the shell's own end of the admit it gave up on", admit); err == nil {
-		t.Fatal("the admit was answered; the test wants the shell to have given up on it")
+	if saw := finished(t, "the shell's own end of the admit it gave up on", admit); saw.err == nil {
+		t.Fatalf("the admit was answered (%d %s); the test wants the shell to have given up on it", saw.status, saw.body)
 	}
 	settles("with the admission abandoned by its caller and still working", 1)
 
@@ -507,8 +524,12 @@ func TestMembership_Admission_AnAbandonedRetryHoldsNoRequestSlot(t *testing.T) {
 		shutOut(w, given.what, retry)
 		settles("with "+given.what+" waiting", 2)
 		giveUp()
-		if err := finished(t, "the shell's own end of "+given.what, retry); err == nil {
-			t.Fatalf("%s was answered while the admission held the order", given.what)
+		// What the shell's end sees is its own error, as a rule. Now and then
+		// the daemon's word to a caller that has gone reaches it first (seen on
+		// the hosted CI, and here with every core busy): that word must be the
+		// refusal kept for it, never an answer.
+		if saw := finished(t, "the shell's own end of "+given.what, retry); saw.err == nil && !saw.abandoned() {
+			t.Fatalf("%s was answered while the admission held the order: %d %q", given.what, saw.status, saw.body)
 		}
 		settles("with "+given.what+" given up on, and the admission still in its wait", 1)
 		if n := waitingForTheOrder(); n != 1 {
@@ -533,6 +554,61 @@ func TestMembership_Admission_AnAbandonedRetryHoldsNoRequestSlot(t *testing.T) {
 	}
 	if b.drains != 2 {
 		t.Fatalf("%d waits; want one for each admission that started a session", b.drains)
+	}
+}
+
+// What a read is answered when its caller went away while it waited: 503
+// request_abandoned, and never the 200 with no body that a handler which
+// simply returned would be given by the server. Nobody is there to read it as
+// a rule, but the caller's own end can be handed it in the moment it lets go
+// (the hosted CI's failure on 301437e3 was that 200), and the access log
+// records it. Each read route, with the order held and the handler called
+// directly: seen waiting, given up on, and then its answer read. With its
+// caller there, the same handler answers 200 once the order is free.
+func TestMembership_Admission_AReadGivenUpOnIsToldSo(t *testing.T) {
+	b := newMemberBed(t, true)
+	b.mustBeAdmitted(lifeA)
+	for _, route := range []struct {
+		path string
+		read http.HandlerFunc
+	}{
+		{"/v1/app/lifetime", b.srv.handleAppLifetimeRead},
+		{"/v1/operating-session", b.srv.handleOperatingSessionRead},
+	} {
+		t.Run(route.path, func(t *testing.T) {
+			release := b.srv.HoldSessionOrder()
+			held := true
+			letGo := func() {
+				if held {
+					held = false
+					release()
+				}
+			}
+			defer letGo()
+
+			ctx, giveUp := context.WithCancel(context.Background())
+			defer giveUp()
+			gone := httptest.NewRecorder()
+			done := make(chan struct{})
+			w := orderWatch(t, admissionReadsOrder)
+			go func() {
+				defer close(done)
+				route.read(gone, httptest.NewRequest(http.MethodGet, route.path, nil).WithContext(ctx))
+			}()
+			shutOut(w, "the read", done)
+			giveUp()
+			arrived(t, "the read to return once its caller had gone", done)
+			if gone.Code != http.StatusServiceUnavailable || errorCode(t, gone.Body.Bytes()) != requestAbandoned {
+				t.Fatalf("a read given up on was answered %d %s; want 503 %s", gone.Code, gone.Body.String(), requestAbandoned)
+			}
+
+			letGo()
+			there := httptest.NewRecorder()
+			route.read(there, httptest.NewRequest(http.MethodGet, route.path, nil))
+			if there.Code != http.StatusOK || !strings.HasPrefix(strings.TrimSpace(there.Body.String()), "{") {
+				t.Fatalf("with its caller there the read answered %d %s; want 200 and its state", there.Code, there.Body.String())
+			}
+		})
 	}
 }
 

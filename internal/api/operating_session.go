@@ -210,7 +210,8 @@ func (s *Server) handleOperatingSessionRead(w http.ResponseWriter, r *http.Reque
 	})
 	if !answered {
 		// The caller went away while the read waited for the admission's order:
-		// nothing was read, and there is nobody to answer.
+		// nothing was read.
+		s.writeAbandoned(w, op)
 		return
 	}
 	if err != nil {
