@@ -65,9 +65,16 @@ let bound: string | null;
 let handed: SessionStateLike[];
 // Every archive the gate reported as another than the one proven.
 let others: string[];
+// How many reads of the state the gate has sent.
+let readsSent: number;
 
 const ok = (state: SessionStateLike): SessionReadLike => ({ kind: 'ok', state });
 const failed: SessionReadLike = { kind: 'error', message: 'Cannot reach the daemon.' };
+
+// Let a read the gate sent by itself be answered and drawn.
+async function flushPromises(): Promise<void> {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+}
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
     let resolve!: (v: T) => void;
@@ -83,10 +90,12 @@ beforeEach(() => {
     bound = HOME;
     handed = [];
     others = [];
+    readsSent = 0;
     setRecoveryPorts({
         drawn: (state) => handed.push(state),
         otherArchive: (id) => others.push(id),
         read: () => {
+            readsSent++;
             const next = reads.shift();
             if (next === undefined) throw new Error('the test queued no read');
             return Promise.resolve(next);
@@ -586,9 +595,65 @@ describe('two answers at the same generation are ordered by when they were asked
         await readSessionState();
         expect(recovery.session?.contactCount).toBe(3);
 
+        // The earlier read answers last. It is not drawn; and because the page
+        // cannot know which of the two the daemon answered first, it asks once
+        // more. That read was sent after both, so its answer is the truth: here,
+        // that there are still three.
+        reads.push(ok(counted(3)));
         older.resolve(ok(counted(2)));
         expect(await first).toBe(false); // not drawn
+        await flushPromises();
+        expect(reads).toHaveLength(0); // the reconciling read was sent
         expect(recovery.session?.contactCount).toBe(3);
+    });
+
+    // The clean-room review of ff5e855c: the order two reads were SENT in is
+    // not the order the daemon answered them in. The read sent first can be
+    // the one the daemon served last, and so the newer in fact.
+    it('when the earlier-sent read was in fact the later one, the page ends on what the daemon holds', async () => {
+        reads.push(ok(counted(1)));
+        await readSessionState();
+
+        const sentFirst = deferred<SessionReadLike>(); // waits at the daemon
+        reads.push(sentFirst.promise);
+        reads.push(ok(counted(3))); // sent second, served first: three contacts
+        const first = readSessionState();
+        await readSessionState();
+        expect(recovery.session?.contactCount).toBe(3);
+
+        // A contact is deleted; no generation moves. Then the first read is
+        // served: two. By its number it looks older, and it is not drawn...
+        reads.push(ok(counted(2))); // ...but the page asks again, and is told: two.
+        sentFirst.resolve(ok(counted(2)));
+        await first;
+        await flushPromises();
+
+        expect(reads).toHaveLength(0);
+        expect(recovery.session?.contactCount).toBe(2);
+    });
+
+    it('asks again only when nothing sent later is still on its way', async () => {
+        reads.push(ok(counted(1)));
+        await readSessionState();
+
+        const sentFirst = deferred<SessionReadLike>();
+        const sentThird = deferred<SessionReadLike>();
+        reads.push(sentFirst.promise);
+        reads.push(ok(counted(3)));
+        reads.push(sentThird.promise);
+        const first = readSessionState();
+        await readSessionState(); // the second: drawn
+        const third = readSessionState(); // a third is out, sent after both
+
+        expect(readsSent).toBe(4);
+        sentFirst.resolve(ok(counted(2))); // refused by its number
+        await first;
+        await flushPromises();
+        expect(readsSent).toBe(4); // no fifth read: the third of these will settle it
+
+        sentThird.resolve(ok(counted(2)));
+        await third;
+        expect(recovery.session?.contactCount).toBe(2);
     });
 
     it('the question is not dismissed by an earlier read that said open', async () => {
@@ -599,10 +664,30 @@ describe('two answers at the same generation are ordered by when they were asked
         await readSessionState();
         expect(recovery.status).toBe('question');
 
+        reads.push(ok(question(4))); // the reconciling read: still the question
         older.resolve(ok(held(4)));
         expect(await first).toBe(false);
+        await flushPromises();
         expect(recovery.status).toBe('question');
-        expect(handed.map((s) => s.state)).toEqual(['recovery_pending']);
+        // Never the workspace, even for a moment: "open" was handed on to nobody.
+        expect(handed.map((s) => s.state)).toEqual(['recovery_pending', 'recovery_pending']);
+    });
+
+    it('an answer of an OLDER generation is simply not drawn: nothing is asked again', async () => {
+        const sentFirst = deferred<SessionReadLike>();
+        reads.push(sentFirst.promise);
+        reads.push(ok(held(5)));
+        const first = readSessionState();
+        await readSessionState(); // sent second: generation 5, drawn
+        const sent = readsSent;
+
+        // Sent first, answered last, and a generation behind: plainly older,
+        // whichever the daemon served first. There is nothing to reconcile.
+        sentFirst.resolve(ok(question(4)));
+        expect(await first).toBe(false);
+        await flushPromises();
+        expect(readsSent).toBe(sent);
+        expect(recovery.status).toBe('clear');
     });
 
     it('a higher generation is drawn whenever it was asked for', async () => {
@@ -629,8 +714,11 @@ describe('two answers at the same generation are ordered by when they were asked
         await answerRecovery('continue');
         expect(recovery.status).toBe('clear');
 
+        reads.push(ok(held(4))); // the reconciling read: open, as the answer said
         older.resolve(ok(question(4)));
         await early;
+        expect(recovery.status).toBe('clear'); // the question is not put back, even for a moment
+        await flushPromises();
         expect(recovery.status).toBe('clear');
     });
 });

@@ -25,9 +25,15 @@
         for. A state changes without its generation changing (a contact joins
         and the count rises; the same session reads "open" or "recovery
         pending" by which app is admitted when the daemon is asked), so of two
-        requests that overlap the answer of the one sent later is the newer,
-        whichever arrives first (codex-276). A read sent before an answer
-        cannot put the old question back;
+        requests that overlap, the one sent later is taken as the newer when
+        its answer is the first to arrive, and the earlier one's answer is
+        then not drawn (codex-276). But the order two requests were SENT in is
+        not the order the daemon served them in: the earlier one may have been
+        served last, and be the newer in fact. The page cannot tell. So when
+        it sets such an answer aside it makes sure a read sent after BOTH is on
+        its way, and that read's answer, which is newer than either, is what
+        the page ends on (the review of ff5e855c). A read sent before an
+        answer cannot put the old question back;
       - a state is drawn only for the archive the boot has PROVEN. One read
         before that proof, or for another archive, is not drawn and is not
         kept: the page stays as it was. A read SENT before the proof draws
@@ -119,6 +125,11 @@ let drawn: { archiveId: string; generation: number; asked: number } | null = nul
 // Counts the requests sent, reads and answers alike: each takes the next number
 // as it is sent, and that number orders two answers at one generation.
 let asked = 0;
+// The numbers of the READS that are out. When an answer is set aside for its
+// number, the page looks here for a read sent after the state it shows; with
+// none on its way it sends one.
+// (A plain list: nothing reads it reactively, and it holds a handful at most.)
+let readsOut: number[] = [];
 // Counts the states drawn. A read notes it when it is sent: if it has moved by
 // the time that read fails, something authoritative has been drawn since, by a
 // later read or by an answer, and the failure is obsolete.
@@ -165,6 +176,18 @@ function draw(state: SessionStateLike, sentAs: number): boolean {
     return true;
 }
 
+// An answer was not drawn. If that was because it was sent before the state
+// shown at the SAME generation, which of the two the daemon served last is not
+// known: make sure a read sent after the one shown is on its way. One that is
+// already out will do; with none, one is sent. Its answer is newer than both.
+function reconcile(state: SessionStateLike, sentAs: number): void {
+    if (drawn === null || drawn.archiveId !== state.archiveId) return;
+    if (state.generation !== drawn.generation || sentAs >= drawn.asked) return;
+    const shownAs = drawn.asked;
+    if (readsOut.some((n) => n > shownAs)) return;
+    void read(false);
+}
+
 // read reports whether its answer was drawn: false when it failed, and when
 // its answer was refused (another archive's, sent before the proof, or older
 // than the state shown).
@@ -178,7 +201,13 @@ async function read(uncertain: boolean): Promise<boolean> {
     // drawing it would also make that read's failure look obsolete.
     const sentFor = ports.archive();
     const sentAs = ++asked;
-    const out = await ports.read();
+    readsOut.push(sentAs);
+    let out: SessionReadLike;
+    try {
+        out = await ports.read();
+    } finally {
+        readsOut = readsOut.filter((n) => n !== sentAs);
+    }
     if (out.kind === 'ok') {
         if (sentFor === null) return false;
         if (out.state.archiveId !== sentFor) {
@@ -191,6 +220,7 @@ async function read(uncertain: boolean): Promise<boolean> {
         }
         const drawnNow = draw(out.state, sentAs);
         if (drawnNow && !uncertain) recovery.error = '';
+        if (!drawnNow) reconcile(out.state, sentAs);
         return drawnNow;
     }
     if (draws !== drawsWhenSent) return false; // obsolete: a state has been drawn since this was sent
@@ -260,5 +290,6 @@ export function _resetRecoveryForTests(): void {
     ports = null;
     drawn = null;
     asked = 0;
+    readsOut = [];
     draws = 0;
 }

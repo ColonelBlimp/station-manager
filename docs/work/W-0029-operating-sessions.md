@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) and one more after that commit's own review (the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), and one more after that commit's own review (the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -5928,3 +5928,33 @@ than the test may run was no wait.
 Tests seen to fail first: one in the daemon's API package (it read `open` at generation 1,
 as Codex found), five on the page. Six reversions in a temporary copy, each failing its
 test.
+
+### Part 6, slice 2: the order two reads are answered in (after the review of `ff5e855c`; 2026-11-26; uncommitted when written)
+
+The clean-room review of `ff5e855c` found one defect in the rule that commit added to the
+recovery gate, and it stands.
+
+**The order two reads are sent in is not the order the daemon serves them in.** `ff5e855c`
+ordered two answers at one generation by when they were asked for. But the daemon's read of
+the state waits for the admission's order by trying for it, and two reads that overlap can
+be served in either order. So the read sent first can be the one served last, and the newer
+in fact: with a contact deleted in between (no generation moves), its answer was set aside
+for its number and the recovery question kept the wrong count. Before `ff5e855c` that answer
+would have been drawn, and the opposite order would have been wrong instead. Neither rule
+is right, because the page cannot know which was served last.
+
+**Corrected.** The page still sets aside, at one generation, the answer of the read sent
+earlier: drawing it could put back something older, and in the case Codex showed
+(codex-276) could replace the question with the workspace. But it no longer leaves it
+there. It makes sure a read sent after the state it shows is on its way: one that is
+already out will do, and with none it sends one. That read was sent after both answers
+arrived, so the daemon serves it after both, and its answer is what the page ends on. An
+answer of an older generation is plainly older and asks for nothing.
+
+**Shown** at the gate: the reviewer's order (the first-sent read served last, with the true
+count) ends on the true count; Codex's order (the first-sent read stale) ends where it
+was; a later read already on its way is not doubled; an older generation asks for nothing;
+the question is never replaced by the workspace on the way, even for a moment. Three seen
+to fail first. Three reversions in a temporary copy, each failing a named assertion. Two
+of my tests first failed their reversion only through an unhandled error, without stating
+the rule; they now count the reads sent.
