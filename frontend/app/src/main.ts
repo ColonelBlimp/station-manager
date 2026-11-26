@@ -15,7 +15,9 @@ import { allocateContestSerial } from './lib/api/contest-serial';
 import {
     refreshSessionRows,
     sessionContactStored,
+    sessionMayHaveChanged,
     sessionStateDrawn,
+    sessionStreamLost,
     sessionStreamReopened,
     setSessionPorts,
 } from './lib/operate/session.svelte';
@@ -94,6 +96,7 @@ import {
 import { toasts } from './lib/ui/toasts.svelte';
 import { setup, setSetupSave } from './lib/setup.svelte';
 import { readSessionState, sessionArchiveProven, setRecoveryPorts } from './lib/recovery.svelte';
+import { fileUnderArchive } from './lib/operate/archiveStores.svelte';
 import {
     answerOperatingSession,
     fetchOperatingSession,
@@ -730,12 +733,19 @@ function enrichmentExtras(call: string, myGrid: string) {
 // gate draws is handed to the Session (drawn), which reads that session's rows.
 // A contact event carries no row: it only asks for the rows to be read again,
 // and what is drawn is the answer, which names its archive. At every opening the
-// rows are read again and a read sent before is given up.
+// rows are read again and a read sent before is given up. The Session is told
+// the moment the page knows its rows may be out of date, before anything has
+// been read: when the stream drops (changes can no longer be announced) and
+// when the session is said to have changed (the rows on screen may be another
+// session's). It holds export and email from then until it has read again.
 setRecoveryPorts({
     read: fetchOperatingSession,
     answer: answerOperatingSession,
     archive: boundArchive,
     drawn: sessionStateDrawn,
+    // A state answered for another archive than the one proven goes to the sink
+    // every write from another archive goes to: it starts the archive check.
+    otherArchive: (id) => fileUnderArchive(id, 'session state', () => {}),
 });
 setSessionPorts({
     readRows: fetchSessionMembers,
@@ -743,16 +753,18 @@ setSessionPorts({
     archive: boundArchive,
 });
 openLogEvents({
-    onOpen: () => {
-        void readSessionState();
-        sessionStreamReopened();
-    },
-    onTransportError: () => {},
+    // The Session reads the state at every opening, through the gate's own
+    // read (its readState port), and reads its rows again: it needs to know
+    // when both have answered since.
+    onOpen: sessionStreamReopened,
+    onTransportError: sessionStreamLost,
     onQsoChanged: (event, p) => {
         if (event === 'qso.stored') sessionContactStored(p.operating_session_id);
         else refreshSessionRows();
     },
-    onSessionChanged: () => void readSessionState(),
+    // The state is read through the Session (its readState port is the gate's
+    // own read), which knows from this moment that its rows may be stale.
+    onSessionChanged: sessionMayHaveChanged,
     onReconnect: () => {
         refreshLogbookCount();
         void verifyArchiveGeneration();

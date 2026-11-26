@@ -14,13 +14,18 @@ import {
     refreshSessionRows,
     sessionContactStored,
     sessionStreamReopened,
-    sessionEmailSent,
+    sessionStreamLost,
+    sessionMayHaveChanged,
     _resetSessionForTests,
     type DrawnSessionState,
     type SessionRowLike,
     type SessionRowsReadLike,
 } from './session.svelte';
-import { _reloadArchiveStoresForTests, bindArchiveStores } from './archiveStores.svelte';
+import {
+    _reloadArchiveStoresForTests,
+    bindArchiveStores,
+    setStoresMismatchSink,
+} from './archiveStores.svelte';
 
 const ARCHIVE = '01a16a00-0000-7000-8000-000000000001';
 const OTHER_ARCHIVE = '01a16a00-0000-7000-8000-000000000002';
@@ -75,8 +80,9 @@ function open(
 // answers it, in whatever order the test chooses.
 class Daemon {
     readonly sent: ((a: SessionRowsReadLike) => void)[] = [];
-    /** One for each read of the state asked for: call it when that read has finished. */
-    readonly stateDone: (() => void)[] = [];
+    /** One for each read of the state asked for: call it when that read has
+     *  finished, with true when it answered and its state was drawn. */
+    readonly stateDone: ((drawn?: boolean) => void)[] = [];
     stateReads = 0;
     bound: string | null = ARCHIVE;
 
@@ -85,7 +91,9 @@ class Daemon {
             readRows: () => new Promise<SessionRowsReadLike>((resolve) => this.sent.push(resolve)),
             readState: () => {
                 this.stateReads++;
-                return new Promise<void>((resolve) => this.stateDone.push(resolve));
+                return new Promise<boolean>((resolve) =>
+                    this.stateDone.push((drawn) => resolve(drawn === true))
+                );
             },
             archive: () => this.bound,
         });
@@ -508,7 +516,7 @@ describe('what is said while the page waits after a failed read (B7)', () => {
         sessionStateDrawn(open(S1, 4));
         await daemon.answer(1, rows(S2, 5, [row('K2B')]));
         sessionStateDrawn(open(S2, 5)); // the state read drew it
-        daemon.stateDone[0]();
+        daemon.stateDone[0](true);
         await settle();
 
         expect(session.rows).toBe('loading');
@@ -518,47 +526,314 @@ describe('what is said while the page waits after a failed read (B7)', () => {
     });
 });
 
-// The "already emailed" mark is the contact's own record, read from the daemon
-// (ruling 6). Between a send and the read that shows its stamps, the rows on
-// screen still say "not emailed": a send from them would mail the same contacts
-// again (codex-273). The Session says when that is so.
-describe('after an email send, until a read taken after it has answered', () => {
-    it('is pending until a read SENT after the send is drawn', async () => {
+// The rows on screen can be OLDER than something the page knows has happened: a
+// contact this window just logged, an email it just sent, a change announced
+// by an event, anything missed while the stream was down. Until a read TAKEN
+// AFTER that has been drawn, the Session is behind, and says so: an export or a
+// send from those rows would silently leave out the contact just logged (the
+// clean-room review of 13d7c5b6), or mail again the contacts just mailed
+// (codex-273). Rows on screen are kept; what is known is that they are not all.
+describe('the rows are behind what the page knows', () => {
+    it('is behind from a change until a read SENT after it is drawn', async () => {
         sessionStateDrawn(open(S1, 4));
+        expect(session.behind).toBe(true); // nothing read yet
         await daemon.answer(1, rows(S1, 4, [row('G4A')]));
-        expect(session.emailPending).toBe(false);
+        expect(session.behind).toBe(false);
 
-        refreshSessionRows(); // read 2 is out, from before the send
-        sessionEmailSent();
-        expect(session.emailPending).toBe(true);
+        refreshSessionRows(); // read 2 is out
+        refreshSessionRows(); // K2B is logged while it is out
+        expect(session.behind).toBe(true);
 
-        await daemon.answer(2, rows(S1, 4, [row('G4A')])); // taken before the send: proves nothing
-        expect(session.emailPending).toBe(true);
-        expect(daemon.sent).toHaveLength(3);
+        await daemon.answer(2, rows(S1, 4, [row('G4A')])); // taken before K2B: proves nothing
+        expect(session.behind).toBe(true);
+        expect(calls()).toEqual(['G4A']);
 
-        await daemon.answer(3, rows(S1, 4, [row('G4A', { emailed: true })]));
-        expect(session.emailPending).toBe(false);
-        expect(session.qsos[0].emailed).toBe(true);
+        await daemon.answer(3, rows(S1, 4, [row('K2B'), row('G4A')]));
+        expect(session.behind).toBe(false);
     });
 
-    it('stays pending through a failed read, and clears at the next that succeeds', async () => {
+    it('stays behind through a failed read, with its rows kept, until one succeeds', async () => {
         sessionStateDrawn(open(S1, 4));
         await daemon.answer(1, rows(S1, 4, [row('G4A')]));
 
-        sessionEmailSent();
+        sessionContactStored(S1);
         await daemon.answer(2, { kind: 'error', message: 'Cannot reach the daemon.' });
-        expect(session.emailPending).toBe(true);
+        expect(calls()).toEqual(['G4A']);
+        expect(session.rows).toBe('ok');
+        expect(session.behind).toBe(true); // the rows are there, and are not all
 
-        refreshSessionRows(); // asked again, as reopening the dialog asks
-        await daemon.answer(3, rows(S1, 4, [row('G4A', { emailed: true })]));
-        expect(session.emailPending).toBe(false);
+        refreshSessionRows(); // asked again, as opening the Export dialog asks
+        await daemon.answer(3, rows(S1, 4, [row('K2B'), row('G4A')]));
+        expect(session.behind).toBe(false);
     });
 
-    it('is not pending for a session that is no longer shown', async () => {
+    it('is behind from a reopening of the stream until the rows are read again', async () => {
         sessionStateDrawn(open(S1, 4));
         await daemon.answer(1, rows(S1, 4, [row('G4A')]));
-        sessionEmailSent();
+
+        sessionStreamReopened(); // what happened while it was down is not known
+        expect(session.behind).toBe(true);
+        await daemon.answer(2, rows(S1, 4, [row('G4A')]));
+        sessionStateDrawn(open(S1, 4));
+        daemon.stateDone[0](true);
+        await settle();
+        expect(session.behind).toBe(false);
+    });
+
+    it('is not behind with no session shown, and starts behind for a new one', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+        refreshSessionRows();
         sessionStateDrawn({ archiveId: ARCHIVE, generation: 5, state: 'none', session: null });
-        expect(session.emailPending).toBe(false);
+        expect(session.behind).toBe(false);
+
+        sessionStateDrawn(open(S2, 6));
+        expect(session.behind).toBe(true);
+        await daemon.answer(3, rows(S2, 6, []));
+        expect(session.behind).toBe(false);
+    });
+});
+
+// Codex's review of the correction (codex-274): three more ways the rows could be
+// treated as current when the page already knew they might not be.
+describe('behind as soon as the page knows the rows may be another session’s, or missed', () => {
+    it('is behind at once when the session may have changed, and a read already out does not clear it', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+        refreshSessionRows(); // read 2 is out
+        await daemon.answer(2, rows(S1, 4, [row('G4A')]));
+        expect(session.behind).toBe(false);
+
+        refreshSessionRows(); // read 3 is out when the change is announced
+        sessionMayHaveChanged(); // operating_session.changed: the state is being read
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('reading');
+        expect(daemon.stateReads).toBe(1);
+
+        await daemon.answer(3, rows(S1, 4, [row('G4A')])); // taken before the change: proves nothing
+        expect(session.behind).toBe(true);
+
+        sessionStateDrawn(open(S2, 5)); // the state read drew the new session
+        daemon.stateDone[0](true);
+        await settle();
+        expect(session.behind).toBe(true); // its rows are not read yet
+        const last = daemon.sent.length;
+        await daemon.answer(last, rows(S2, 5, [row('K2B')]));
+        expect(session.behind).toBe(false);
+        expect(session.hold).toBe('');
+        expect(calls()).toEqual(['K2B']);
+    });
+
+    it('when the state turns out unchanged, the rows are read again before they are trusted', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+
+        sessionMayHaveChanged();
+        sessionStateDrawn(open(S1, 4)); // the same session at the same generation
+        daemon.stateDone[0](true);
+        await settle();
+        expect(session.behind).toBe(true);
+        expect(daemon.sent).toHaveLength(2); // a read was sent after the announcement
+        await daemon.answer(2, rows(S1, 4, [row('G4A')]));
+        expect(session.behind).toBe(false);
+    });
+
+    it('when the state cannot be read, it stays behind and says nothing is being read', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+
+        sessionMayHaveChanged();
+        expect(session.hold).toBe('reading');
+        daemon.stateDone[0](); // the state read finished and drew nothing
+        await settle();
+
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('failed');
+        expect(calls()).toEqual(['G4A']); // the rows stay on screen
+
+        refreshSessionRows(); // the operator asks again: the state is checked again too
+        expect(session.hold).toBe('reading');
+        expect(daemon.stateReads).toBe(2);
+        await daemon.answer(2, rows(S1, 4, [row('G4A')])); // the rows: still this session
+        expect(session.behind).toBe(true); // rows alone do not say the workspace may act
+        sessionStateDrawn(open(S1, 4));
+        daemon.stateDone[1](true); // and the state: still open, for this app
+        await settle();
+        expect(session.behind).toBe(false);
+    });
+
+    it('a stored contact of a session not shown puts the rows behind at once', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+        sessionContactStored(S2);
+        expect(session.behind).toBe(true);
+        expect(daemon.stateReads).toBe(1);
+    });
+
+    it('is behind from the loss of the event stream until the read after it reopens', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+
+        sessionStreamLost(); // changes can no longer be announced
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('stream');
+
+        refreshSessionRows(); // a read made during the outage proves nothing about what follows it
+        await daemon.answer(2, rows(S1, 4, [row('G4A')]));
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('stream');
+
+        sessionStreamReopened();
+        expect(session.hold).toBe('reading');
+        const last = daemon.sent.length;
+        await daemon.answer(last, rows(S1, 4, [row('K2B'), row('G4A')]));
+        sessionStateDrawn(open(S1, 4));
+        daemon.stateDone[0](true);
+        await settle();
+        expect(session.behind).toBe(false);
+        expect(calls()).toEqual(['K2B', 'G4A']);
+    });
+
+    it('says a read is on its way, then that it failed', async () => {
+        sessionStateDrawn(open(S1, 4));
+        expect(session.hold).toBe('reading');
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+        expect(session.hold).toBe('');
+
+        refreshSessionRows();
+        expect(session.hold).toBe('reading');
+        await daemon.answer(2, { kind: 'error', message: 'Cannot reach the daemon.' });
+        expect(session.hold).toBe('failed');
+    });
+
+    it('rows that name another archive start the page’s archive check', async () => {
+        let checks = 0;
+        setStoresMismatchSink(() => checks++);
+        try {
+            sessionStateDrawn(open(S1, 4));
+            await daemon.answer(1, rows(S1, 4, [row('G4A')], OTHER_ARCHIVE));
+            expect(checks).toBe(1);
+            expect(calls()).toEqual([]);
+
+            // Rows of the page's own archive start nothing.
+            refreshSessionRows();
+            await daemon.answer(2, rows(S1, 4, [row('G4A')]));
+            expect(checks).toBe(1);
+        } finally {
+            setStoresMismatchSink(() => {});
+        }
+    });
+});
+
+// Codex's third reading of the hold (codex-275).
+describe('what a matching list of contacts does not settle', () => {
+    // The same session at the same generation can be "open" for one caller and
+    // "recovery pending" for another. The rows say who was in the session; only
+    // the state says whether this workspace may act on it.
+    it('matching rows do not release the hold while the state check is out', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+
+        sessionStreamReopened(); // the state and the rows are both read again
+        expect(daemon.stateReads).toBe(1);
+        await daemon.answer(2, rows(S1, 4, [row('G4A')])); // the rows come first, and match
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('reading');
+
+        // The state: recovery pending. The workspace is replaced by the question.
+        sessionStateDrawn({
+            archiveId: ARCHIVE,
+            generation: 4,
+            state: 'recovery_pending',
+            session: { id: S1, openedAt: '2026-11-25T09:15:00Z', sittingStartedAt: null },
+        });
+        daemon.stateDone[0](true);
+        await settle();
+        expect(calls()).toEqual([]);
+        expect(session.behind).toBe(false); // there is nothing here to export
+    });
+
+    it('the same after the session is said to have changed', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+
+        sessionMayHaveChanged();
+        refreshSessionRows(); // a contact event follows; its rows are sent after the announcement
+        await daemon.answer(2, rows(S1, 4, [row('G4A')]));
+        expect(session.behind).toBe(true);
+
+        sessionStateDrawn(open(S1, 4));
+        daemon.stateDone[0](true);
+        await settle();
+        expect(session.behind).toBe(false);
+    });
+
+    it('a state check that fails at a reopening is said, and asking again checks the state again', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+
+        sessionStreamReopened();
+        await daemon.answer(2, rows(S1, 4, [row('G4A')]));
+        daemon.stateDone[0](false);
+        await settle();
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('failed');
+
+        refreshSessionRows(); // "Read again"
+        expect(daemon.stateReads).toBe(2);
+        await daemon.answer(3, rows(S1, 4, [row('G4A')]));
+        sessionStateDrawn(open(S1, 4));
+        daemon.stateDone[1](true);
+        await settle();
+        expect(session.behind).toBe(false);
+    });
+});
+
+describe('a state question left open is asked again when a session comes to be shown', () => {
+    // The gate can draw a state the Session did not ask for: the load's own
+    // read, "Try again", the answer to the recovery question. If a state check
+    // had failed before that, it is not settled by such a draw (it may be of a
+    // read sent earlier); the Session asks, so the hold does not wait on the
+    // operator finding "Read again".
+    it('asks for the state itself, and is released when that answers', async () => {
+        sessionStateDrawn({ archiveId: ARCHIVE, generation: 3, state: 'none', session: null });
+        sessionStreamReopened();
+        daemon.stateDone[0](false); // the check at the opening failed
+        await settle();
+        expect(daemon.stateReads).toBe(1);
+
+        sessionStateDrawn(open(S1, 4)); // drawn by the gate's own "Try again"
+        expect(daemon.stateReads).toBe(2);
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('reading');
+
+        sessionStateDrawn(open(S1, 4));
+        daemon.stateDone[1](true);
+        await settle();
+        expect(session.behind).toBe(false);
+        expect(daemon.stateReads).toBe(2); // and it does not go on asking
+    });
+});
+
+describe('before the event stream has opened for the first time', () => {
+    it('rows read by then are shown, and are behind until the stream is open and they are read again', async () => {
+        _resetSessionForTests({ streamOpen: false }); // a page that has just loaded
+        daemon = new Daemon();
+        daemon.connect();
+
+        sessionStateDrawn(open(S1, 4)); // the load's own read of the state
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+        expect(calls()).toEqual(['G4A']); // the panel is populated
+        expect(session.behind).toBe(true); // and nothing can yet announce a change
+        expect(session.hold).toBe('stream');
+
+        sessionStreamReopened(); // the first opening
+        await daemon.answer(2, rows(S1, 4, [row('K2B'), row('G4A')]));
+        sessionStateDrawn(open(S1, 4));
+        daemon.stateDone[0](true);
+        await settle();
+        expect(session.behind).toBe(false);
+        expect(calls()).toEqual(['K2B', 'G4A']);
     });
 });

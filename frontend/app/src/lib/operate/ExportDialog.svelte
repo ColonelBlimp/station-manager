@@ -8,9 +8,10 @@
     //
     // Cabrillo is deliberately absent (no daemon support + needs contest
     // metadata) — a real option lands when the format does, not a greyed tease.
+    import { untrack } from 'svelte';
     import { fade } from 'svelte/transition';
     import { operate, closeExport } from './state.svelte';
-    import { session, refreshSessionRows, sessionEmailSent } from './session.svelte';
+    import { session, refreshSessionRows } from './session.svelte';
     import { sessionActionBlock } from './archiveStores.svelte';
     import { mailer } from './mailer.svelte';
     import { sendSessionEmail } from '../api/session-email';
@@ -57,20 +58,32 @@
     $effect(() => {
         if (operate.exportOpen) onlyUnsent = true;
     });
-    // After a send, the "already emailed" marks on screen are older than the send
-    // until a read taken after it has answered (session.emailPending). Until
-    // then Send is held: a send from these rows would mail the same contacts
-    // again. Opening the dialog asks for that read again, so a read that failed
-    // is retried by the operator coming back here, and by nothing else they
-    // would have to know about.
+    // The rows on screen can be older than something the page knows has
+    // happened (session.behind): a contact logged a moment ago whose row has not
+    // been read yet, an email just sent whose stamps have not, a session that
+    // may have changed, anything missed while the event stream is down. A
+    // download from them would leave a contact out or export another session's;
+    // a send would mail the same contacts again. So both are held until the
+    // Session has been read again, and the dialog says which of three things is
+    // so: a read is on its way; the read failed (with a way to try again); or the
+    // stream is down (which mends itself).
+    const HOLDS = {
+        reading:
+            'The Session is being read again from the daemon. Download and Send are available once it has been.',
+        failed: 'The Session could not be read again from the daemon, so Download and Send are held.',
+        stream: "The page has lost its connection to the daemon's events, so the Session may be out of date. Download and Send are held until it is back.",
+    } as const;
+    const behindHold = $derived(session.hold === '' ? null : HOLDS[session.hold]);
+    // Opening the dialog on a Session whose read has failed tries again, once:
+    // the operator coming back here is the retry. An event that arrives while
+    // the dialog is open has already asked for its own read, so this watches
+    // the opening and nothing else.
     $effect(() => {
-        if (operate.exportOpen && session.emailPending) refreshSessionRows();
+        if (!operate.exportOpen) return;
+        untrack(() => {
+            if (session.hold === 'failed') refreshSessionRows();
+        });
     });
-    const emailHold = $derived(
-        session.emailPending
-            ? "The last send is being checked against the daemon's records. Send is available once the Session has been read again."
-            : null
-    );
     const sendRows = $derived(onlyUnsent ? unsentRows : session.qsos);
     // What the send is accounted against (distinct UUIDs + rows without one), so
     // the label matches the denominator of its report.
@@ -82,7 +95,7 @@
             recipient.includes('@') &&
             !sending &&
             blocked === null &&
-            emailHold === null
+            behindHold === null
     );
 
     // The daemon rebuilds the ADIF from the DB (enriched record + a backup in
@@ -94,7 +107,7 @@
     }
 
     async function downloadAdif(): Promise<void> {
-        if (count === 0 || downloading || blocked !== null) return;
+        if (count === 0 || downloading || blocked !== null || behindHold !== null) return;
         const sel = snapshotSelection(session.qsos);
         if (sel.uuids.length === 0) {
             toasts.warn('None of these QSOs can be exported: they have no QSO ID.');
@@ -149,7 +162,7 @@
                     // The window marks nothing itself, so a partial send cannot
                     // be shown as a whole one.
                     const report = emailReport(sel, to, outcome.lists);
-                    sessionEmailSent();
+                    refreshSessionRows();
                     show(report);
                     closeExport();
                     break;
@@ -180,7 +193,7 @@
                     // The stamps may have been made too, so the rows are held
                     // as after a send: no resend from them until the daemon's
                     // records have been read.
-                    sessionEmailSent();
+                    refreshSessionRows();
                     if (outcome.timedOut === true) {
                         toasts.warn(
                             `${OUTCOME_UNKNOWN_LEAD} The email may already have been sent; check before retrying.`
@@ -247,6 +260,17 @@
                 </p>
                 {#if blocked !== null}
                     <p class="mt-2 text-sm text-warning" role="status">{blocked}</p>
+                {:else if behindHold !== null}
+                    <p class="mt-2 text-sm text-warning" role="status">
+                        {behindHold}
+                        {#if session.hold === 'failed'}
+                            <button
+                                type="button"
+                                class="ml-1 cursor-pointer underline"
+                                onclick={refreshSessionRows}>Read again</button
+                            >
+                        {/if}
+                    </p>
                 {/if}
 
                 <!-- Download ADIF (offline, no daemon) -->
@@ -256,7 +280,10 @@
                         <p class="text-xs text-muted">Save this session as an ADIF file.</p>
                         <button
                             class="btn shrink-0"
-                            disabled={count === 0 || downloading || blocked !== null}
+                            disabled={count === 0 ||
+                                downloading ||
+                                blocked !== null ||
+                                behindHold !== null}
                             onclick={downloadAdif}
                         >
                             {downloading ? 'Exporting…' : 'ADIF'}
@@ -297,9 +324,6 @@
                                       : 'Send'}
                             </button>
                         </div>
-                        {#if emailHold !== null}
-                            <p class="mt-2 text-xs text-warning" role="status">{emailHold}</p>
-                        {/if}
                         {#if emailedCount > 0}
                             <label class="mt-2 flex items-center gap-2 text-xs text-muted">
                                 <input

@@ -403,7 +403,7 @@ describe('SessionPanel states', () => {
                 answer === null
                     ? new Promise<SessionRowsReadLike>(() => {})
                     : Promise.resolve(answer),
-            readState: () => Promise.resolve(),
+            readState: () => Promise.resolve(true),
             archive: () => TEST_ARCHIVE,
         });
         sessionStateDrawn({
@@ -589,7 +589,7 @@ describe('SessionPanel start line across midnight UTC', () => {
         _resetDaemonClockForTests();
         setSessionPorts({
             readRows: () => new Promise(() => {}),
-            readState: () => Promise.resolve(),
+            readState: () => Promise.resolve(true),
             archive: () => TEST_ARCHIVE,
         });
         sessionStateDrawn({
@@ -618,7 +618,7 @@ describe('SessionPanel start line across midnight UTC', () => {
         noteDaemonDate(new Date(Date.parse('2026-11-25T23:58:00Z')).toUTCString());
         setSessionPorts({
             readRows: () => new Promise(() => {}),
-            readState: () => Promise.resolve(),
+            readState: () => Promise.resolve(true),
             archive: () => TEST_ARCHIVE,
         });
         sessionStateDrawn({

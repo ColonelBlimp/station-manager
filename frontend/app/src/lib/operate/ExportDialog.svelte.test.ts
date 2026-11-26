@@ -10,6 +10,10 @@ import { setSessionActionGate } from './archiveStores.svelte';
 import { operate, closeExport } from './state.svelte';
 import {
     session,
+    refreshSessionRows,
+    sessionMayHaveChanged,
+    sessionStreamLost,
+    sessionStreamReopened,
     setSessionPorts,
     sessionStateDrawn,
     _resetSessionForTests,
@@ -65,6 +69,12 @@ async function daemonSession(held: {
     hold?: Promise<void>;
     /** When true, a read of the rows fails. */
     fail?: boolean;
+    /** When set, a read of the STATE waits for it before it finishes. */
+    state?: Promise<void>;
+    /** When true, a read of the state draws nothing: it failed. */
+    stateFails?: boolean;
+    /** Counts the reads of the state asked for. */
+    stateReads?: number;
 }): Promise<() => number> {
     let reads = 0;
     setSessionPorts({
@@ -80,7 +90,11 @@ async function daemonSession(held: {
                 members: held.rows,
             });
         },
-        readState: () => Promise.resolve(),
+        readState: async () => {
+            held.stateReads = (held.stateReads ?? 0) + 1;
+            if (held.state) await held.state;
+            return held.stateFails !== true;
+        },
         archive: () => TEST_ARCHIVE,
     });
     sessionStateDrawn({
@@ -684,7 +698,8 @@ describe('ExportDialog', () => {
 // review of the cutover, codex-273). Send is held until a read TAKEN AFTER the
 // send has answered: while that read is out, and when it has failed.
 describe('ExportDialog after a send, before the Session has been read again', () => {
-    const PENDING = /checked against the daemon/;
+    const PENDING = /being read again from the daemon/;
+    const FAILED = /could not be read again from the daemon/;
     const sendButton = (): HTMLButtonElement => screen.getByRole('button', { name: /^Send/ });
 
     async function sendOnce(held: {
@@ -742,7 +757,7 @@ describe('ExportDialog after a send, before the Session has been read again', ()
         flushSync();
         await flush();
         expect(reads()).toBe(afterSend + 1); // opening it asked again
-        expect(screen.getByText(PENDING)).toBeInTheDocument();
+        expect(screen.getByText(FAILED)).toBeInTheDocument();
         expect(sendButton()).toBeDisabled();
         await fireEvent.click(sendButton());
         await flush();
@@ -782,7 +797,264 @@ describe('ExportDialog after a send, before the Session has been read again', ()
         expect(posts).toBe(1);
 
         // The email may have gone out. Until the records can be read, no resend.
-        expect(screen.getByText(PENDING)).toBeInTheDocument();
+        expect(screen.getByText(FAILED)).toBeInTheDocument();
         expect(sendButton()).toBeDisabled();
+    });
+});
+
+// The window no longer adds a row when it logs a contact: the row comes from
+// the daemon's next answer. An export taken in between, or after that read has
+// failed, would be accounted against the older rows and silently leave the
+// contact out (the clean-room review of 13d7c5b6). While the Session is behind
+// what the page knows, the download and the send are both held.
+describe('ExportDialog while the Session is behind', () => {
+    const BEHIND = /being read again from the daemon/;
+    const FAILED = /could not be read again from the daemon/;
+    const STREAM = /lost its connection to the daemon/;
+    const send = (): HTMLButtonElement => screen.getByRole('button', { name: /^Send/ });
+    const download = (): HTMLButtonElement => screen.getByRole('button', { name: /^ADIF$/ });
+
+    it('a contact logged a moment ago is not left out of a download', async () => {
+        const held: { rows: SessionRowLike[]; hold?: Promise<void> } = { rows: [daemonRow('u1')] };
+        await daemonSession(held);
+        const exported: string[][] = [];
+        vi.spyOn(sessionExport, 'exportSessionAdif').mockImplementation((uuids: string[]) => {
+            exported.push(uuids);
+            return Promise.resolve({ kind: 'network', message: 'not under test' });
+        });
+
+        // The operator logs u2 and opens Export at once: the read for it is out.
+        let release: () => void = () => {};
+        held.hold = new Promise<void>((r) => (release = r));
+        refreshSessionRows();
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+
+        expect(screen.getByText(BEHIND)).toBeInTheDocument();
+        expect(download()).toBeDisabled();
+        await fireEvent.click(download());
+        await flush();
+        expect(exported).toEqual([]); // nothing was exported from the older rows
+
+        held.rows = [daemonRow('u2'), daemonRow('u1')];
+        release();
+        await flush();
+        await flush();
+        flushSync();
+        expect(screen.queryByText(BEHIND)).not.toBeInTheDocument();
+        expect(download()).not.toBeDisabled();
+        await fireEvent.click(download());
+        await flush();
+        expect(exported.map((u) => [...u].sort())).toEqual([['u1', 'u2']]);
+    });
+
+    it('with that read failed, the download stays held and opening the dialog asks again', async () => {
+        const held: { rows: SessionRowLike[]; fail?: boolean } = { rows: [daemonRow('u1')] };
+        const reads = await daemonSession(held);
+        const exportAdif = vi.spyOn(sessionExport, 'exportSessionAdif');
+
+        held.fail = true;
+        refreshSessionRows(); // u2 was logged; the read for it fails
+        await flush();
+        const afterFailure = reads();
+
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+        await flush();
+        expect(reads()).toBe(afterFailure + 1); // opening it asked again
+        expect(screen.getByText(FAILED)).toBeInTheDocument();
+        expect(download()).toBeDisabled();
+        await fireEvent.click(download());
+        await flush();
+        expect(exportAdif).not.toHaveBeenCalled();
+    });
+
+    // Codex's review of the correction (codex-274).
+    it('one event with the dialog open asks for one read, and its answer frees the buttons', async () => {
+        setMailer(true, 'qsl@example.com');
+        const held: { rows: SessionRowLike[]; fail?: boolean } = { rows: [daemonRow('u1')] };
+        const reads = await daemonSession(held);
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+        const before = reads();
+
+        held.rows = [daemonRow('u2'), daemonRow('u1')];
+        refreshSessionRows(); // one stored event
+        await flush();
+        held.fail = true; // any read after that one would fail
+        await flush();
+        flushSync();
+
+        expect(reads()).toBe(before + 1);
+        expect(screen.queryByText(BEHIND)).not.toBeInTheDocument();
+        expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
+        expect(download()).not.toBeDisabled();
+        expect(send()).not.toBeDisabled();
+    });
+
+    it('a read that fails is said, with a way to try again that works', async () => {
+        setMailer(true, 'qsl@example.com');
+        const held: { rows: SessionRowLike[]; fail?: boolean } = { rows: [daemonRow('u1')] };
+        const reads = await daemonSession(held);
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+
+        held.fail = true;
+        refreshSessionRows(); // a contact was logged; its read fails
+        await flush();
+        flushSync();
+        expect(screen.getByText(FAILED)).toBeInTheDocument();
+        expect(screen.queryByText(BEHIND)).not.toBeInTheDocument(); // nothing is being read
+        expect(download()).toBeDisabled();
+        expect(send()).toBeDisabled();
+
+        held.fail = false;
+        held.rows = [daemonRow('u2'), daemonRow('u1')];
+        const before = reads();
+        await fireEvent.click(screen.getByRole('button', { name: 'Read again' }));
+        await flush();
+        flushSync();
+        expect(reads()).toBe(before + 1);
+        expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
+        expect(download()).not.toBeDisabled();
+        expect(send()).not.toBeDisabled();
+    });
+
+    it('holds both at once when the session may have changed, before the state has answered', async () => {
+        setMailer(true, 'qsl@example.com');
+        let stateAnswers: () => void = () => {};
+        const held: { rows: SessionRowLike[]; state?: Promise<void> } = {
+            rows: [daemonRow('u2'), daemonRow('u1')],
+        };
+        await daemonSession(held);
+        const exportAdif = vi.spyOn(sessionExport, 'exportSessionAdif');
+        const d = stubDaemon((uuids) => json(sentReply(uuids)));
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+        expect(download()).not.toBeDisabled();
+
+        held.state = new Promise<void>((r) => (stateAnswers = r));
+        sessionMayHaveChanged(); // operating_session.changed: another session may be open
+        flushSync();
+
+        expect(screen.getByText(BEHIND)).toBeInTheDocument();
+        expect(download()).toBeDisabled();
+        expect(send()).toBeDisabled();
+        await fireEvent.click(download());
+        await fireEvent.click(send());
+        await flush();
+        expect(exportAdif).not.toHaveBeenCalled();
+        expect(d.bodies).toEqual([]); // the earlier session's contacts went nowhere
+        stateAnswers();
+    });
+
+    it('holds both from the loss of the event stream until the read after it is back', async () => {
+        setMailer(true, 'qsl@example.com');
+        const held: { rows: SessionRowLike[] } = { rows: [daemonRow('u1')] };
+        await daemonSession(held);
+        const exported: string[][] = [];
+        vi.spyOn(sessionExport, 'exportSessionAdif').mockImplementation((uuids: string[]) => {
+            exported.push(uuids);
+            return Promise.resolve({ kind: 'network', message: 'not under test' });
+        });
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+
+        sessionStreamLost();
+        held.rows = [daemonRow('u2'), daemonRow('u1')]; // logged elsewhere; nobody is told
+        flushSync();
+        expect(screen.getByText(STREAM)).toBeInTheDocument();
+        expect(download()).toBeDisabled();
+        expect(send()).toBeDisabled();
+        await fireEvent.click(download()); // a click during the outage
+        await flush();
+        expect(exported).toEqual([]);
+
+        sessionStreamReopened();
+        await flush();
+        await flush();
+        flushSync();
+        expect(screen.queryByText(STREAM)).not.toBeInTheDocument();
+        expect(download()).not.toBeDisabled();
+        await fireEvent.click(download()); // and one after recovery
+        await flush();
+        expect(exported.map((u) => [...u].sort())).toEqual([['u1', 'u2']]);
+    });
+
+    // Codex's third reading (codex-275): rows that match say who is in the
+    // session. Whether this workspace may act on it is the state's to say.
+    it('matching rows do not free the buttons while the state check after a reopening is out', async () => {
+        setMailer(true, 'qsl@example.com');
+        let stateAnswers: () => void = () => {};
+        const held: { rows: SessionRowLike[]; state?: Promise<void> } = {
+            rows: [daemonRow('u1')],
+        };
+        const reads = await daemonSession(held);
+        const exportAdif = vi.spyOn(sessionExport, 'exportSessionAdif');
+        const d = stubDaemon((uuids) => json(sentReply(uuids)));
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+
+        held.state = new Promise<void>((r) => (stateAnswers = r)); // the state is held
+        const before = reads();
+        sessionStreamReopened(); // both are read again; the rows answer at once, and match
+        await flush();
+        await flush();
+        flushSync();
+        expect(reads()).toBe(before + 1);
+
+        expect(screen.getByText(BEHIND)).toBeInTheDocument();
+        expect(download()).toBeDisabled();
+        expect(send()).toBeDisabled();
+        await fireEvent.click(download());
+        await fireEvent.click(send());
+        await flush();
+        expect(exportAdif).not.toHaveBeenCalled();
+        expect(d.bodies).toEqual([]);
+
+        stateAnswers(); // the state: still open, for this app
+        await flush();
+        await flush();
+        flushSync();
+        expect(download()).not.toBeDisabled();
+        expect(send()).not.toBeDisabled();
+    });
+
+    it('"Read again" checks the state again as well as the rows', async () => {
+        setMailer(true, 'qsl@example.com');
+        const held: {
+            rows: SessionRowLike[];
+            stateFails?: boolean;
+            stateReads?: number;
+        } = { rows: [daemonRow('u1')] };
+        await daemonSession(held);
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+
+        held.stateFails = true;
+        sessionStreamReopened(); // the rows answer; the state check fails
+        await flush();
+        await flush();
+        flushSync();
+        expect(screen.getByText(FAILED)).toBeInTheDocument();
+        expect(download()).toBeDisabled();
+
+        held.stateFails = false;
+        const before = held.stateReads ?? 0;
+        await fireEvent.click(screen.getByRole('button', { name: 'Read again' }));
+        await flush();
+        await flush();
+        flushSync();
+        expect(held.stateReads).toBe(before + 1);
+        expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
+        expect(download()).not.toBeDisabled();
     });
 });

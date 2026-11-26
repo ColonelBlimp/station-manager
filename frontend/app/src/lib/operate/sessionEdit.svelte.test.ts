@@ -116,7 +116,7 @@ describe('sessionEdit.save', () => {
                     members: held.rows,
                 });
             },
-            readState: () => Promise.resolve(),
+            readState: () => Promise.resolve(true),
             archive: () => TEST_ARCHIVE,
         });
         sessionStateDrawn({
@@ -184,7 +184,7 @@ describe('sessionEdit.save', () => {
                     sessionId: NEXT,
                     members: [],
                 }),
-            readState: () => Promise.resolve(),
+            readState: () => Promise.resolve(true),
             archive: () => TEST_ARCHIVE,
         });
         sessionStateDrawn({

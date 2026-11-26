@@ -42,17 +42,28 @@
         empty, even when the last answer was an empty list, and never that it
         is still reading once nothing is being read (B7). It is tried again at
         the next change or reopening;
-      - after an email is sent from the rows on screen, the "emailed" marks
-        are older than the send until a read TAKEN AFTER it has answered. The
-        Session says so (emailPending), and the Export dialog sends nothing
-        more until then: the contact's record is what says it was emailed, and
-        the window does not guess.
+      - the rows on screen can be OLDER than something the page knows has
+        happened: a contact this window just logged, an email it just sent, a
+        change an event announced, a session that may have changed, whatever
+        is being missed while the stream is down. From the moment the page
+        knows of it until a read TAKEN AFTER it has been drawn the Session is
+        behind (session.behind, with the reason in session.hold), and the
+        Export dialog exports and sends nothing. Two reads have to have
+        answered since: the ROWS, which say who is in the session; and, when
+        the session may have changed or the stream has reopened, the STATE,
+        which alone says whether this workspace may act on it (the same
+        session at the same generation can be open for one app and awaiting
+        its recovery answer for another). And the stream has to be open: until
+        it has opened for the first time nothing can announce a change. So: a download from those rows would leave out the contact just
+        logged, and a send would mail again the contacts just mailed. Rows on
+        screen are kept while it is behind; what is known is that they are not
+        all, or not as they now are.
 
     ADR 0045: this module never imports lib/api. main.ts injects the read of
     the rows, the read of the state and the bound archive (setSessionPorts).
 */
 
-import { registerArchiveStore } from './archiveStores.svelte';
+import { fileUnderArchive, registerArchiveStore } from './archiveStores.svelte';
 
 export interface SessionQso {
     /** Stable for the page's life for one contact (the list's key). */
@@ -110,8 +121,9 @@ export interface DrawnSessionState {
 export interface SessionPorts {
     readRows: () => Promise<SessionRowsReadLike>;
     /** Ask for the session's state to be read and drawn again. It settles when
-     *  that read has finished, whether it drew a state or failed. */
-    readState: () => Promise<void>;
+     *  that read has finished: true when it answered and its state was drawn,
+     *  false when it failed or drew nothing. */
+    readState: () => Promise<boolean>;
     /** The archive the page is bound to; null while none is proven. */
     archive: () => string | null;
 }
@@ -133,9 +145,14 @@ export const session: {
     rows: SessionRowsStatus;
     /** Why the rows could not be read; '' when nothing went wrong. */
     error: string;
-    /** An email was sent from these rows and no read taken after it has been
-     *  drawn: the "emailed" marks on screen may be older than the send. */
-    emailPending: boolean;
+    /** The rows on screen are older than something the page knows has
+     *  happened, and no read taken after it has been drawn yet. Always false
+     *  with no session shown. */
+    behind: boolean;
+    /** Why the rows are behind, for whoever holds an action on it: a read is
+     *  on its way; the last one failed and nothing is being read; the event
+     *  stream is down. '' when they are not behind. */
+    hold: '' | 'reading' | 'failed' | 'stream';
 } = $state({
     qsos: [],
     state: null,
@@ -144,7 +161,8 @@ export const session: {
     sittingStartedAt: null,
     rows: 'none',
     error: '',
-    emailPending: false,
+    behind: false,
+    hold: '',
 });
 
 let ports: SessionPorts | null = null;
@@ -156,10 +174,54 @@ let shown: { archiveId: string; sessionId: string; generation: number } | null =
 let epoch = 0;
 let out = false; // a read is out
 let again = false; // a change arrived while it was out
-// Email sends from this window, counted; and the count a drawn read was sent
-// at. While the first is ahead, no read taken after the last send has been drawn.
-let emailSends = 0;
-let emailSendsRead = 0;
+// The things the page has learnt may have changed the rows, counted; and the
+// count a drawn read was SENT at. While the first is ahead, no read taken after
+// the last of them has been drawn: the rows on screen are behind.
+let asks = 0;
+let asksRead = 0;
+// The same for the STATE: the times the page has learnt the session's state
+// may have changed (it was said to have; the stream reopened; the rows answered
+// for another session), and the count a state read that was DRAWN was sent at.
+// While the first is ahead, nothing sent since has said this workspace may act.
+let stateAsks = 0;
+let stateAsksRead = 0;
+// The event stream is open. False until it has opened for the first time, and
+// whenever it is down: changes cannot be announced then, so nothing read can
+// be known to be current until the stream is open and the reads are made again.
+let streamUp = false;
+// Reads of the state this module asked for that have not finished.
+let stateReads = 0;
+
+// mark says whether the rows are behind, and why, from what is known now. It
+// is called after everything that can change the answer.
+function mark(): void {
+    const behind = shown !== null && (!streamUp || asks > asksRead || stateAsks > stateAsksRead);
+    session.behind = behind;
+    if (!behind) session.hold = '';
+    else if (!streamUp) session.hold = 'stream';
+    else if (out || stateReads > 0) session.hold = 'reading';
+    else session.hold = 'failed';
+}
+
+// Ask for the state to be read, and know while that read is on its way. A read
+// that answers and is drawn settles every state question known when it was
+// SENT; one that fails, or draws nothing, settles none.
+function readState(): Promise<boolean> {
+    if (ports === null) return Promise.resolve(false);
+    const sentAt = stateAsks;
+    stateReads++;
+    mark();
+    return ports
+        .readState()
+        .then((drawn) => {
+            if (drawn) stateAsksRead = Math.max(stateAsksRead, sentAt);
+            return drawn;
+        })
+        .finally(() => {
+            stateReads--;
+            mark();
+        });
+}
 // One number per contact for the page's life, so a row keeps its place in the
 // keyed list from one read to the next.
 // A plain record, not a Map: nothing reads it reactively, and it is cleared by
@@ -201,8 +263,8 @@ function forget(): void {
     session.sittingStartedAt = null;
     session.rows = 'none';
     session.error = '';
-    emailSendsRead = emailSends;
-    session.emailPending = false;
+    asksRead = asks;
+    mark();
 }
 
 registerArchiveStore({
@@ -270,8 +332,8 @@ export function sessionStateDrawn(state: DrawnSessionState): void {
         session.sittingStartedAt = null;
         session.rows = 'none';
         session.error = '';
-        emailSendsRead = emailSends; // no session shown: nothing can be sent from it
-        session.emailPending = false;
+        asksRead = asks; // no session shown: there are no rows to be behind
+        mark();
         return;
     }
     session.openedAt = open.openedAt;
@@ -282,7 +344,13 @@ export function sessionStateDrawn(state: DrawnSessionState): void {
         shown.sessionId === open.id &&
         shown.generation === state.generation
     ) {
-        return; // the session and generation already shown: its rows stand
+        // The session and generation already shown: its rows stand. But if
+        // the page had learnt they might be behind (the session was said to
+        // have changed, and has not), they are read again before they are
+        // trusted: a read sent now is taken after that.
+        if (asks > asksRead) void read();
+        settleState();
+        return;
     }
     // Another session, or this one at another generation (New and then
     // Continue bring a session back at a new one): its rows are read again,
@@ -292,9 +360,17 @@ export function sessionStateDrawn(state: DrawnSessionState): void {
     session.qsos = [];
     session.rows = 'loading';
     session.error = '';
-    emailSendsRead = emailSends; // its rows are all read after any send so far
-    session.emailPending = false;
+    asks++; // nothing of this session has been read yet
+    settleState();
     readAfresh();
+}
+
+// A state question left open, with no read of the state on its way: ask. The
+// gate draws states the Session did not ask for (the load's read, "Try again",
+// the answer to the recovery question), and such a draw does not settle a
+// check that failed earlier: it may be of a read sent before it.
+function settleState(): void {
+    if (stateAsks > stateAsksRead && stateReads === 0) void readState();
 }
 
 // Give up a read that is out and send one now.
@@ -302,6 +378,7 @@ function readAfresh(): void {
     epoch++;
     out = false;
     again = false;
+    mark();
     void read();
 }
 
@@ -312,9 +389,10 @@ async function read(): Promise<void> {
         return;
     }
     out = true;
+    mark();
     const sentEpoch = epoch;
     const sentFor = ports.archive();
-    const sentAtSends = emailSends;
+    const sentAtAsks = asks;
     let answer: SessionRowsReadLike;
     try {
         answer = await ports.readRows();
@@ -324,10 +402,10 @@ async function read(): Promise<void> {
     if (sentEpoch !== epoch) return; // given up: a later read is the one to draw
     out = false;
     if (draw(answer, sentFor)) {
-        // This read was taken after every send counted when it was sent.
-        emailSendsRead = Math.max(emailSendsRead, sentAtSends);
-        session.emailPending = emailSends > emailSendsRead;
+        // This read was taken after everything counted when it was sent.
+        asksRead = Math.max(asksRead, sentAtAsks);
     }
+    mark();
     if (again) {
         again = false;
         void read();
@@ -351,7 +429,15 @@ function draw(answer: SessionRowsReadLike, sentFor: string | null): boolean {
         return false;
     }
     if (sentFor === null || answer.archiveId !== sentFor || ports.archive() !== sentFor) {
-        return false; // another archive's rows, or the page's archive was not proven
+        // Another archive's rows, or the page's archive was not proven: not
+        // drawn. Rows that positively name ANOTHER archive than the one the
+        // page proved are also what starts the page's own archive check (the
+        // same sink every write from another archive goes to): nothing else
+        // may notice, when the event stream first opens on that daemon.
+        if (sentFor !== null && answer.archiveId !== sentFor) {
+            fileUnderArchive(answer.archiveId, 'session rows', () => {});
+        }
+        return false;
     }
     if (answer.sessionId !== shown.sessionId || answer.generation !== shown.generation) {
         // Rows of a session or generation the page does not show: the page's
@@ -360,7 +446,8 @@ function draw(answer: SessionRowsReadLike, sentFor: string | null): boolean {
         // failed), nothing is being read any more, and with no rows on screen
         // the panel must say so and not go on saying it is reading.
         const at = epoch;
-        void ports.readState().then(() => {
+        stateAsks++;
+        void readState().then(() => {
             if (epoch !== at || shown === null) return; // a state was drawn: its rows are being read
             if (session.qsos.length === 0) {
                 session.rows = 'failed';
@@ -381,6 +468,18 @@ function draw(answer: SessionRowsReadLike, sentFor: string | null): boolean {
  * are read again. It carries no row and draws nothing by itself.
  */
 export function refreshSessionRows(): void {
+    ask();
+}
+
+// Something may have changed the rows: they are behind until a read sent from
+// now on has been drawn, and one is asked for.
+function ask(): void {
+    if (shown === null) return;
+    asks++;
+    // A state question still open (its read failed) is asked again with the
+    // rows: "Read again" retries both.
+    settleState();
+    mark();
     void read();
 }
 
@@ -392,10 +491,10 @@ export function refreshSessionRows(): void {
 export function sessionContactStored(sessionId: string | undefined): void {
     if (sessionId === undefined || sessionId === '') return; // it joined no session
     if (shown === null || shown.sessionId !== sessionId) {
-        void ports?.readState();
+        sessionMayHaveChanged();
         return;
     }
-    void read();
+    ask();
 }
 
 /**
@@ -404,20 +503,40 @@ export function sessionContactStored(sessionId: string | undefined): void {
  * is given up: it may be older than those changes.
  */
 export function sessionStreamReopened(): void {
-    if (shown === null) return;
+    streamUp = true;
+    // The state is read at every opening (it is the recovery gate's read too),
+    // and for a session shown it must answer before the workspace may act.
+    stateAsks++;
+    void readState();
+    if (shown === null) {
+        mark();
+        return;
+    }
+    asks++;
     readAfresh();
 }
 
 /**
- * An email has been sent from the rows on screen. Their "emailed" marks are
- * now older than the send: the Session is pending until a read taken after
- * this moment has been drawn, and that read is asked for now.
+ * The session may have changed (operating_session.changed, or a stored contact
+ * naming a session the page does not show). The state is read; and from this
+ * moment the rows on screen may be another session's, so they are behind until
+ * the state has been read and rows taken after this have been drawn. A read of
+ * the rows that was already out proves nothing.
  */
-export function sessionEmailSent(): void {
-    if (shown === null) return;
-    emailSends++;
-    session.emailPending = true;
-    void read();
+export function sessionMayHaveChanged(): void {
+    if (shown !== null) asks++;
+    stateAsks++;
+    void readState();
+}
+
+/**
+ * The event stream is down. Changes cannot be announced while it is, so the
+ * rows are behind from now until it is back and they have been read again:
+ * nothing read during the outage can be known to be current after it.
+ */
+export function sessionStreamLost(): void {
+    streamUp = false;
+    mark();
 }
 
 /** Test seam — draw rows as if a read of the session shown had answered them. */
@@ -431,11 +550,20 @@ export function _seedSessionForTests(rows: Omit<SessionQso, 'id'>[]): void {
 }
 
 /** Test seam — restore the singleton between cases. */
-export function _resetSessionForTests(): void {
+export function _resetSessionForTests(opts: { streamOpen?: boolean } = {}): void {
+    // A test of something that READS the Session starts with the stream open,
+    // which is where a page spends its life. The page's own start, with the
+    // stream not yet open, is asked for by name ({ streamOpen: false }) and is
+    // what main.sessionboot.test.ts shows through the real main.ts.
+    streamUp = opts.streamOpen ?? true;
+    stateAsks = 0;
+    stateAsksRead = 0;
     forget();
     out = false;
-    emailSends = 0;
-    emailSendsRead = 0;
+    asks = 0;
+    asksRead = 0;
+    stateReads = 0;
+    mark();
     ports = null;
     ids = {};
     nextId = 1;

@@ -208,4 +208,51 @@ describe('main.ts: the Session is the daemon’s', () => {
         expect(stateReads()).toBe(before + 1);
         expect(session.sessionId).toBe(S3);
     });
+
+    // Codex's review of the correction (codex-274), through the real wiring.
+    it('is behind from operating_session.changed until the state and the rows agree', async () => {
+        const S4 = '01a1f83c-da20-751f-80b7-ec9a3f1f9304';
+        await vi.waitFor(() => expect(session.behind).toBe(false));
+        let answerState: () => void = () => {};
+        daemon.routes[STATE] = {
+            status: 200,
+            body: state(S4, 7, new Date().toISOString()),
+            hold: new Promise<void>((r) => (answerState = r)),
+        };
+        daemon.routes[ROWS] = { status: 200, body: members(S4, 7, [member(5, 'VK5NEW')]) };
+
+        event('operating_session.changed', { archive_id: ARCHIVE, generation: 7 });
+
+        expect(session.behind).toBe(true); // at once: the rows on screen may be another session's
+        expect(calls()).toEqual(['ZS4FIRST']); // they stay on screen, and are not offered for export
+        answerState();
+        await vi.waitFor(() => expect(session.behind).toBe(false));
+        expect(session.sessionId).toBe(S4);
+        expect(calls()).toEqual(['VK5NEW']);
+    });
+
+    it('is behind from the loss of the event stream until the read after it is back', async () => {
+        const dropped = shellStream();
+        dropped.emit('error');
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('stream');
+
+        (await nextSocket(dropped, (fn) => vi.waitFor(fn))).emit('open');
+        await vi.waitFor(() => expect(session.behind).toBe(false));
+    });
+
+    it('rows that name another archive start the page’s archive check', async () => {
+        const OTHER = '01a1640f-815a-75e4-bae2-b9ef8d86f8c3';
+        const identityReads = (): number =>
+            daemon.sent.filter((s) => s.method === 'GET' && s.url === '/v1/version').length;
+        const before = identityReads();
+        const current = session.sessionId;
+        daemon.routes[ROWS] = {
+            status: 200,
+            body: { archive_id: OTHER, generation: 7, session_id: current, members: [] },
+        };
+        event('qso.updated', { qso_uuid: uuid(5), logbook_id: 1 });
+        await vi.waitFor(() => expect(identityReads()).toBeGreaterThan(before));
+        expect(calls()).toEqual(['VK5NEW']); // nothing of the other archive was drawn
+    });
 });

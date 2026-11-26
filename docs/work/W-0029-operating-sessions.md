@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is built (2026-11-26, the last section; uncommitted when written) and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with one correction after the commit's own review (the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -5761,3 +5761,105 @@ it.
 /v1/operating-session/closed` has no caller until then. H2's test of the upgrade itself is
 the scenario above with its storage case in `main.session.test.ts`; the install step is the
 operator's.
+
+### Part 6, slice 2 corrected after the commit's review (2026-11-26; uncommitted when written)
+
+The clean-room review of `13d7c5b6` found one defect, and it stands.
+
+**An export could silently leave out a contact just logged.** Before the cutover the window
+added the row itself the moment a contact was stored. Now the row comes from the daemon's
+next answer. In between, and for as long as that read had failed with other rows still on
+screen, the list looked complete and was not: a download or a send taken then was accounted
+against the older rows, and the contact was left out with nothing said. The reviewer's
+example is an operator who logs the last contact of a sitting and exports at once.
+
+It is the same fault as the repeated email of codex-273, seen from the other side, so the
+correction is one rule and not a second one beside it.
+
+**The rule.** The Session knows when its rows are *behind*: older than something the page
+knows has happened. That is a contact this window logged, an email it sent, a change an
+event announced, a reopening of the event stream (what happened while it was down is not
+known), and a session newly shown whose rows are not yet read. It stays behind until a read
+*sent after* the last of those has been drawn: a read already out when the change arrived
+proves nothing, and a failed read proves nothing. Rows on screen are kept meanwhile.
+(`session.behind`; it replaces the email-only state of the first correction.)
+
+**What the operator sees.** While the Session is behind, the Export dialog holds both the
+download and the send, and says why: "The Session is being read again from the daemon.
+Download and Send are available once it has been." In ordinary running that is a few
+milliseconds after each contact. If the read has failed, opening the dialog asks for it
+again.
+
+**Shown.** At the reader: behind from a change until a read sent after it is drawn; through
+a failed read with its rows kept; from a reopening; not with no session, and from the start
+for a new one. At the dialog: a contact logged a moment ago is not left out of a download
+(held while its read is out, then exported with the earlier rows); held with the read
+failed, the reopening counted; and the three email cases of the first correction, now on
+the same rule. Nine tests seen to fail first. Seven reversions in a temporary copy, each
+failing its test.
+
+**Not held:** the in-place edit of a row on screen, and Band Activity's worked check, which
+has its own record of what was just worked for exactly this gap.
+
+**Codex's review of this correction (codex-274) found four more, and all four stand.** Each
+was reproduced by it through the real page; each is corrected with a test seen to fail
+first.
+1. *A session change left the earlier session's rows exportable.* On
+   `operating_session.changed`, or a stored contact naming another session, the page read
+   the state and went on offering the rows it had. **Now** the Session is behind from the
+   moment it is told the session may have changed, before any answer. A read of the rows
+   already out then proves nothing. If the state turns out unchanged the rows are read
+   again before they are trusted; if it cannot be read, the hold stays.
+2. *The hold began too late when the event stream dropped.* The page knew the stream was
+   down and did nothing until it reopened, so a contact logged elsewhere in between could
+   be left out of an export. **Now** the Session is behind from the loss of the stream until
+   the read made after it is back; nothing read during the outage releases it.
+3. *The Export dialog asked for a second read when one event arrived while it was open,*
+   and if that needless read failed the buttons stayed disabled over a correct list. **Now**
+   it asks again only when it is opened on a Session whose read has failed. And it says
+   which of three things is so (`session.hold`): a read is on its way; the read failed,
+   with "Read again" beside it; or the event stream is down, which mends itself.
+4. *Rows naming another archive were dropped and nothing else happened* (the case I had
+   left to the archive layer in claude-603). Codex showed a way to be left there: the event
+   stream opening for the first time on a daemon serving another archive, which is not a
+   reconnection. **Now** such an answer starts the page's own archive check, through the
+   sink every write from another archive already goes to.
+
+Twenty-one tests seen to fail first across the reader, the dialog and the real `main.ts`;
+thirteen reversions in a temporary copy, each failing its test.
+
+**Its third reading (codex-275) found three more, and all three stand.**
+1. *The first connection had the same gap as a dropped one.* A page reads its rows over HTTP
+   as soon as its archive is proven, before the event stream has opened; a contact stored
+   in that gap is announced to nobody, and the buttons were live. **Now** the stream counts
+   as down until it has opened for the first time. The rows read by then are shown; export
+   and email are held until the stream is open and the reads are made again.
+2. *Matching rows are not permission to act.* The same session at the same generation can be
+   `open` for one app and `recovery_pending` for another (`GET /v1/operating-session` names
+   the state for its caller; the contacts read does not). With the state's answer held, a
+   matching list released the buttons, and the state then replaced the workspace with the
+   recovery question. **Now** two reads have to have answered since the event: the rows,
+   and a state read *sent after* it that was drawn. That holds after a reopening, after the
+   session is said to have changed, and after rows that name another session. A state
+   check that fails is said, and "Read again" checks the state again as well as the rows.
+   The recovery gate's read now reports whether its answer was drawn, which is what the
+   Session waits for.
+3. *A state answered for another archive started nothing.* With the boot proving archive A
+   and the daemon then serving B before the first state answer, the event stream opening on
+   B for the first time is not a reconnection; the gate dropped B's state, no contacts
+   read was ever sent, and the page sat on a blank workspace. **Now** a state read sent with
+   an archive proven and answered for another starts the page's archive check, as rows of
+   another archive do. A read sent before the proof is still dropped and reports nothing.
+
+One thing follows from 2 and is mine: a state question left open by a failed check is asked
+again whenever a session comes to be shown, so that a state drawn by the gate's own "Try
+again" or by a recovery answer does not leave the buttons held until the operator finds
+"Read again".
+
+Tests seen to fail first at the reader, the gate and through the real `main.ts` (two new
+boundary tests: the page before its first stream opening; a state for another archive);
+fourteen reversions in a temporary copy, each failing its test. The page reads the state
+once at each opening, as before: the read is now made through the Session.
+
+The line-keyed entry for the submit seam in the maintainability baseline moved again, 588
+to 591, with the imports added above it.

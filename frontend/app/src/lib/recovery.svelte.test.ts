@@ -63,6 +63,8 @@ let pressed: Array<[string, number, string]>;
 let bound: string | null;
 // Every state the gate handed on as drawn (W-0029 part 6): the Session follows these.
 let handed: SessionStateLike[];
+// Every archive the gate reported as another than the one proven.
+let others: string[];
 
 const ok = (state: SessionStateLike): SessionReadLike => ({ kind: 'ok', state });
 const failed: SessionReadLike = { kind: 'error', message: 'Cannot reach the daemon.' };
@@ -80,8 +82,10 @@ beforeEach(() => {
     pressed = [];
     bound = HOME;
     handed = [];
+    others = [];
     setRecoveryPorts({
         drawn: (state) => handed.push(state),
+        otherArchive: (id) => others.push(id),
         read: () => {
             const next = reads.shift();
             if (next === undefined) throw new Error('the test queued no read');
@@ -507,6 +511,45 @@ describe('each state drawn is handed on, and no state refused is', () => {
         reads.push(ok(held(7)));
         await readSessionState();
 
+        expect(handed).toEqual([]);
+    });
+});
+
+// Codex's review (codex-275). The Session holds export and email until a state
+// read SENT AFTER the event has been drawn; so the read says whether it was. And
+// a state answered for another archive than the one proven is positive word
+// that the daemon now serves another archive: it starts the page's archive check,
+// which nothing else may do when the event stream first opens on that daemon.
+describe('what a read of the state reports', () => {
+    it('says whether its answer was drawn', async () => {
+        reads.push(ok(held(5)));
+        expect(await readSessionState()).toBe(true);
+
+        reads.push(failed);
+        expect(await readSessionState()).toBe(false);
+
+        reads.push(ok(held(4))); // older than the one shown: not drawn
+        expect(await readSessionState()).toBe(false);
+
+        reads.push(ok(held(9, S1, OTHER))); // another archive's: not drawn
+        expect(await readSessionState()).toBe(false);
+    });
+
+    it('reports another archive, when its own was proven as the read was sent', async () => {
+        reads.push(ok(held(5, S0, OTHER)));
+        await readSessionState();
+        expect(others).toEqual([OTHER]);
+
+        reads.push(ok(held(6)));
+        await readSessionState();
+        expect(others).toEqual([OTHER]); // its own archive reports nothing
+    });
+
+    it('reports nothing for a read sent before any archive was proven', async () => {
+        bound = null;
+        reads.push(ok(held(5, S0, OTHER)));
+        await readSessionState();
+        expect(others).toEqual([]);
         expect(handed).toEqual([]);
     });
 });

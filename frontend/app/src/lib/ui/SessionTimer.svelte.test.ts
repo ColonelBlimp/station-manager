@@ -43,7 +43,7 @@ beforeEach(() => {
     _resetDaemonClockForTests();
     setSessionPorts({
         readRows: () => new Promise(() => {}),
-        readState: () => Promise.resolve(),
+        readState: () => Promise.resolve(true),
         archive: () => TEST_ARCHIVE,
     });
 });

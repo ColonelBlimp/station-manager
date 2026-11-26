@@ -83,6 +83,9 @@ export interface RecoveryPorts {
      *  6): the Session the workspace shows follows the same one rule, so the
      *  panel can never be of a state the gate did not draw. */
     drawn?: (state: SessionStateLike) => void;
+    /** Told when a read sent with an archive proven is answered for ANOTHER
+     *  archive: what starts the page's own archive check. */
+    otherArchive?: (archiveId: string) => void;
 }
 
 export type RecoveryStatus = 'loading' | 'question' | 'unreadable' | 'clear';
@@ -155,8 +158,11 @@ function draw(state: SessionStateLike): boolean {
     return true;
 }
 
-async function read(uncertain: boolean): Promise<void> {
-    if (ports === null) return;
+// read reports whether its answer was drawn: false when it failed, and when
+// its answer was refused (another archive's, sent before the proof, or older
+// than the state shown).
+async function read(uncertain: boolean): Promise<boolean> {
+    if (ports === null) return false;
     const drawsWhenSent = draws;
     // What a read may draw is decided by when it was SENT, not by what is bound
     // when it returns (codex-228). One sent with no archive proven draws
@@ -166,25 +172,36 @@ async function read(uncertain: boolean): Promise<void> {
     const sentFor = ports.archive();
     const out = await ports.read();
     if (out.kind === 'ok') {
-        if (sentFor === null || out.state.archiveId !== sentFor) return;
-        if (draw(out.state) && !uncertain) recovery.error = '';
-        return;
+        if (sentFor === null) return false;
+        if (out.state.archiveId !== sentFor) {
+            // Sent with an archive proven, answered for another: positive word
+            // that the daemon serves another archive now. It is not drawn, and
+            // it starts the page's archive check (codex-275): when the event
+            // stream opens on that daemon for the first time, nothing else does.
+            ports.otherArchive?.(out.state.archiveId);
+            return false;
+        }
+        const drawnNow = draw(out.state);
+        if (drawnNow && !uncertain) recovery.error = '';
+        return drawnNow;
     }
-    if (draws !== drawsWhenSent) return; // obsolete: a state has been drawn since this was sent
+    if (draws !== drawsWhenSent) return false; // obsolete: a state has been drawn since this was sent
     const nothingDrawn = recovery.status === 'loading' || recovery.status === 'unreadable';
     if (nothingDrawn || uncertain) {
         recovery.status = 'unreadable';
         recovery.session = null;
         recovery.error = out.message;
     }
+    return false;
 }
 
 /**
  * Read the session's state and draw it: at the load, when the event stream
  * opens or reopens, on an operating_session.changed event, and for "try
- * again". No timer calls it.
+ * again". No timer calls it. It resolves to whether the answer was drawn,
+ * which is what the Session waits for before it lets export and email act.
  */
-export function readSessionState(): Promise<void> {
+export function readSessionState(): Promise<boolean> {
     return read(false);
 }
 
@@ -194,7 +211,7 @@ export function readSessionState(): Promise<void> {
  * been drawn, and nothing read before now is used: the state is read, and the
  * workspace stays withheld until it is known. This is the load's read.
  */
-export function sessionArchiveProven(): Promise<void> {
+export function sessionArchiveProven(): Promise<boolean> {
     return read(false);
 }
 
