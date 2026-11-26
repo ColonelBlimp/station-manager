@@ -1,8 +1,14 @@
 <script lang="ts">
-    // Session table — QSOs logged this sitting, newest first. Pure presentation
-    // over the session state (the submit sink adds rows); self-contained tile
-    // (ADR 0045/0046): owns its own header (title + the Export… action, which
-    // used to live on the InfoPanel wrapper).
+    // Session table: the contacts of the daemon's operating session, newest
+    // first (W-0029 part 6). Pure presentation over what the page has read of
+    // that session (session.svelte.ts): this window adds no row of its own.
+    // Self-contained tile (ADR 0045/0046): owns its own header (title + the
+    // Export… action, which used to live on the InfoPanel wrapper).
+    //
+    // What it says when there are no rows depends on WHY (criteria B7, C): no
+    // session is open; the archive is being switched; the rows are still being
+    // read; they could not be read; or the session has no contact. Only the
+    // last is "No QSOs logged this session".
     //
     // In-place edit (dogfood 2026-07-18): the callsign is a button that opens
     // the shared EditQsoModal RIGHT HERE — navigating to the Logbook route to
@@ -13,6 +19,9 @@
     import { sessionEdit } from './sessionEdit.svelte';
     import { openExport, focusCallsign } from './state.svelte';
     import { hideTile } from './layout.svelte';
+    import { formatSessionStart } from '../utils/time';
+    import { daemonNowMs } from '../api/daemonClock.svelte';
+    import { onDestroy } from 'svelte';
     import EditQsoModal from '../logbook/EditQsoModal.svelte';
     import type { QsoPatch } from '../api/qso-patch';
     const tableHeight = 'h-55';
@@ -28,18 +37,49 @@
         if (q === '') return session.qsos;
         return session.qsos.filter((r) => r.callsign.toUpperCase().includes(q));
     });
+
+    // The session's first start (ruling 1): for a continued session it is days
+    // before the sitting the header's clock counts. Whether it is "today's" is
+    // judged now, on the daemon's clock, and again each second: a panel left
+    // open across midnight UTC comes to say the date.
+    let nowMs = $state(daemonNowMs());
+    const startTicker = setInterval(() => {
+        nowMs = daemonNowMs();
+    }, 1000);
+    onDestroy(() => clearInterval(startTicker));
+    const started = $derived(
+        session.sessionId !== null && session.openedAt !== null
+            ? formatSessionStart(session.openedAt, new Date(nowMs))
+            : ''
+    );
+
+    // Why there are no rows to show; '' when there are rows.
+    const emptyReason = $derived.by(() => {
+        if (session.qsos.length > 0) return '';
+        if (session.state === 'archive_switching') return 'The archive is being switched.';
+        if (session.sessionId === null) return 'No session is open.';
+        if (session.rows === 'failed') {
+            return `The session's contacts could not be read. ${session.error}`.trim();
+        }
+        if (session.rows === 'loading') return 'Reading the session…';
+        return 'No QSOs logged this session.';
+    });
 </script>
 
 <div class="card w-2xl">
     <div class="flex items-center justify-between">
-        <!-- The count spans BOTH modes: session.qsos is fed by the Phone/CW submit
-             sink and the FT8 ft8-logged SSE alike, so it is the sitting's whole
-             tally, not the current mode's. Muted parens match the header's
-             "Logbook <name> (n)" treatment. -->
+        <!-- The count spans BOTH modes: it is the number of the session's
+             contacts the daemon holds, whichever mode logged them. Muted parens
+             match the header's "Logbook <name> (n)" treatment. -->
         <h3 class="text-sm font-semibold text-ink">
             Session <span class="font-normal text-muted"
                 >({session.qsos.length.toLocaleString()})</span
             >
+            {#if started !== ''}
+                <span class="ml-2 text-xs font-normal text-muted" data-testid="session-started"
+                    >Started {started}</span
+                >
+            {/if}
         </h3>
         <div class="flex items-center gap-x-2">
             <!-- No Map button here: the sidebar's bottom-utilities Map link is
@@ -164,8 +204,11 @@
                 {/if}
             </div>
         {:else}
-            <div class="flex {tableHeight} items-center justify-center text-sm text-muted">
-                No QSOs logged this session.
+            <div
+                class="flex {tableHeight} items-center justify-center text-center text-sm text-muted"
+                data-testid="session-empty"
+            >
+                {emptyReason}
             </div>
         {/if}
     </div>

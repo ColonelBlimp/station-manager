@@ -22,13 +22,25 @@ const question = (contactCount: number): SessionStateLike => ({
     archiveId: HOME,
     generation: 4,
     state: 'recovery_pending',
-    session: { id: S0, openedAt: '2026-11-20T09:15:00Z', contactCount, heldByYou: false },
+    session: {
+        id: S0,
+        openedAt: '2026-11-20T09:15:00Z',
+        sittingStartedAt: '2026-11-20T09:15:00Z',
+        contactCount,
+        heldByYou: false,
+    },
 });
 const held: SessionStateLike = {
     archiveId: HOME,
     generation: 5,
     state: 'open',
-    session: { id: S0, openedAt: '2026-11-20T09:15:00Z', contactCount: 3, heldByYou: true },
+    session: {
+        id: S0,
+        openedAt: '2026-11-20T09:15:00Z',
+        sittingStartedAt: '2026-11-20T09:15:00Z',
+        contactCount: 3,
+        heldByYou: true,
+    },
 };
 
 let nextRead: SessionReadLike;

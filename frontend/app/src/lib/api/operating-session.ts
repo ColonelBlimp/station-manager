@@ -41,6 +41,9 @@ export interface SessionInfo {
     id: string;
     /** When the session started (RFC 3339, UTC). */
     openedAt: string;
+    /** When the sitting now open started (RFC 3339, UTC): what the header's
+     *  clock counts from. Null when the daemon names none the page can read. */
+    sittingStartedAt: string | null;
     /** Contacts not deleted since. It can be 0 for a session that is asked about. */
     contactCount: number;
     heldByYou: boolean;
@@ -66,9 +69,14 @@ function parseSession(v: unknown): SessionInfo | null {
     if (typeof v.opened_at !== 'string' || Number.isNaN(Date.parse(v.opened_at))) return null;
     if (typeof v.contact_count !== 'number' || !Number.isInteger(v.contact_count)) return null;
     if (v.contact_count < 0 || typeof v.held_by_you !== 'boolean') return null;
+    const sitting =
+        typeof v.sitting_started_at === 'string' && !Number.isNaN(Date.parse(v.sitting_started_at))
+            ? v.sitting_started_at
+            : null;
     return {
         id: v.id,
         openedAt: v.opened_at,
+        sittingStartedAt: sitting,
         contactCount: v.contact_count,
         heldByYou: v.held_by_you,
     };
@@ -151,4 +159,109 @@ export async function answerOperatingSession(
         if (state !== null) return { kind: 'stale', state };
     }
     return { kind: 'failed', message: daemonErrorMessage(fetched.response.status, parsed) };
+}
+
+/** One contact of the open session, in the panel's columns
+ *  (GET /v1/operating-session/members). */
+export interface SessionMember {
+    uuid: string;
+    call: string;
+    /** ADIF HHMM or HHMMSS. */
+    timeOn: string;
+    band: string;
+    mode: string;
+    submode?: string;
+    rstSent: string;
+    rstRcvd: string;
+    name: string;
+    country: string;
+    comment: string;
+    /** The contact's own record says it was forwarded by email. */
+    emailed: boolean;
+}
+
+export type SessionMembersRead =
+    | {
+          kind: 'ok';
+          archiveId: string;
+          generation: number;
+          /** The open session the rows are of; null when none is open. */
+          sessionId: string | null;
+          members: SessionMember[];
+      }
+    | { kind: 'error'; message: string };
+
+const MEMBER_TEXT = [
+    'call',
+    'time_on',
+    'band',
+    'mode',
+    'rst_sent',
+    'rst_rcvd',
+    'name',
+    'country',
+    'comment',
+] as const;
+
+function parseMember(v: unknown): SessionMember | null {
+    if (!isPlainObject(v)) return null;
+    if (!isUuidV7(v.uuid) || typeof v.emailed !== 'boolean') return null;
+    for (const k of MEMBER_TEXT) if (typeof v[k] !== 'string') return null;
+    if (v.submode !== undefined && typeof v.submode !== 'string') return null;
+    const text = v as Record<(typeof MEMBER_TEXT)[number], string>;
+    return {
+        uuid: v.uuid,
+        call: text.call,
+        timeOn: text.time_on,
+        band: text.band,
+        mode: text.mode,
+        submode: v.submode,
+        rstSent: text.rst_sent,
+        rstRcvd: text.rst_rcvd,
+        name: text.name,
+        country: text.country,
+        comment: text.comment,
+        emailed: v.emailed,
+    };
+}
+
+const UNREADABLE_ROWS = 'The daemon answered with session contacts this page cannot read.';
+
+/**
+ * Read the open session's contacts, newest stored first. An answer the page
+ * cannot understand in full is an ERROR, never a shorter list: a row left out
+ * would be drawn as the whole session.
+ */
+export async function fetchSessionMembers(): Promise<SessionMembersRead> {
+    const fetched = await safeFetch('/v1/operating-session/members');
+    if (!fetched.ok) {
+        return { kind: 'error', message: 'Cannot reach the daemon.' };
+    }
+    const body = await readJsonBody(fetched.response);
+    if (!fetched.response.ok) {
+        return { kind: 'error', message: daemonErrorMessage(fetched.response.status, body) };
+    }
+    if (
+        !isPlainObject(body) ||
+        !isUuidV7(body.archive_id) ||
+        typeof body.generation !== 'number' ||
+        !Number.isInteger(body.generation) ||
+        !(body.session_id === null || isUuidV7(body.session_id)) ||
+        !Array.isArray(body.members)
+    ) {
+        return { kind: 'error', message: UNREADABLE_ROWS };
+    }
+    const members: SessionMember[] = [];
+    for (const raw of body.members as unknown[]) {
+        const m = parseMember(raw);
+        if (m === null) return { kind: 'error', message: UNREADABLE_ROWS };
+        members.push(m);
+    }
+    return {
+        kind: 'ok',
+        archiveId: body.archive_id,
+        generation: body.generation,
+        sessionId: body.session_id,
+        members,
+    };
 }

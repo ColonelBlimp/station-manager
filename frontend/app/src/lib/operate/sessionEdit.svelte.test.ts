@@ -13,7 +13,17 @@ vi.mock('../api/qso-patch', () => ({
 
 import { sessionEdit } from './sessionEdit.svelte';
 import { setSessionActionGate } from './archiveStores.svelte';
-import { session, addSessionQso, _resetSessionForTests, type SessionQso } from './session.svelte';
+import {
+    session,
+    setSessionPorts,
+    sessionStateDrawn,
+    _resetSessionForTests,
+    type SessionQso,
+    type SessionRowLike,
+    type SessionRowsReadLike,
+} from './session.svelte';
+import { addSessionRow } from '../../test/sessionRows';
+import { TEST_ARCHIVE } from '../../test/archive';
 
 const sq = (over: Partial<SessionQso> = {}): Omit<SessionQso, 'id'> => ({
     uuid: 'u-1',
@@ -39,7 +49,7 @@ beforeEach(() => {
 
 describe('sessionEdit.open', () => {
     it('hydrates the full row by uuid and opens the modal', async () => {
-        addSessionQso(sq());
+        addSessionRow(sq());
         fetchQso.mockResolvedValue({ kind: 'ok', qso: { id: 9, uuid: 'u-1', call: 'G4ABC' } });
         await sessionEdit.open(session.qsos[0]);
         expect(fetchQso).toHaveBeenCalledWith('u-1');
@@ -48,7 +58,7 @@ describe('sessionEdit.open', () => {
     });
 
     it('reports a hydration failure in the panel and never opens', async () => {
-        addSessionQso(sq());
+        addSessionRow(sq());
         fetchQso.mockResolvedValue({ kind: 'error', message: 'Cannot reach the daemon.' });
         await sessionEdit.open(session.qsos[0]);
         expect(sessionEdit.row).toBeNull();
@@ -57,7 +67,7 @@ describe('sessionEdit.open', () => {
     });
 
     it('is a no-op for rows without a uuid', async () => {
-        addSessionQso(sq({ uuid: undefined }));
+        addSessionRow(sq({ uuid: undefined }));
         await sessionEdit.open(session.qsos[0]);
         expect(fetchQso).not.toHaveBeenCalled();
         expect(sessionEdit.row).toBeNull();
@@ -66,7 +76,7 @@ describe('sessionEdit.open', () => {
 
 describe('sessionEdit.save', () => {
     async function openOn(row: Omit<SessionQso, 'id'>): Promise<void> {
-        addSessionQso(row);
+        addSessionRow(row);
         fetchQso.mockResolvedValue({
             kind: 'ok',
             qso: { id: 9, uuid: row.uuid, call: row.callsign },
@@ -74,34 +84,124 @@ describe('sessionEdit.save', () => {
         await sessionEdit.open(session.qsos[0]);
     }
 
-    it('PATCHes, overlays the canonical row onto the session list, and closes', async () => {
-        await openOn(sq());
+    // The daemon as the Session reads it: an open session whose rows are
+    // whatever `held` is when a read is answered.
+    const SESSION = '01a1f83c-da20-7000-8000-0000000000a1';
+    function daemonRow(over: Partial<SessionRowLike> = {}): SessionRowLike {
+        return {
+            uuid: 'u-1',
+            call: 'G4ABC',
+            timeOn: '143000',
+            band: '20m',
+            mode: 'SSB',
+            rstSent: '59',
+            rstRcvd: '59',
+            name: '',
+            country: 'England',
+            comment: '',
+            emailed: false,
+            ...over,
+        };
+    }
+    async function sessionOf(held: { rows: SessionRowLike[] }): Promise<{ reads: () => number }> {
+        let reads = 0;
+        setSessionPorts({
+            readRows: (): Promise<SessionRowsReadLike> => {
+                reads++;
+                return Promise.resolve({
+                    kind: 'ok',
+                    archiveId: TEST_ARCHIVE,
+                    generation: 4,
+                    sessionId: SESSION,
+                    members: held.rows,
+                });
+            },
+            readState: () => Promise.resolve(),
+            archive: () => TEST_ARCHIVE,
+        });
+        sessionStateDrawn({
+            archiveId: TEST_ARCHIVE,
+            generation: 4,
+            state: 'open',
+            session: { id: SESSION, openedAt: '2026-11-25T09:15:00Z', sittingStartedAt: null },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        return { reads: () => reads };
+    }
+    const settle = async (): Promise<void> => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+    };
+
+    it('PATCHes, reads the rows again, and closes: the row shows what the DAEMON holds (A6)', async () => {
+        const held = { rows: [daemonRow()] };
+        const daemon = await sessionOf(held);
+        fetchQso.mockResolvedValue({ kind: 'ok', qso: { id: 9, uuid: 'u-1', call: 'G4ABC' } });
+        await sessionEdit.open(session.qsos[0]);
+        const before = daemon.reads();
+        // The PATCH's own answer and the daemon's row differ on purpose: what
+        // the panel shows must be the read, not the answer written in.
+        held.rows = [
+            daemonRow({ name: 'Fred', band: '40m', mode: 'SSB', submode: 'USB', timeOn: '143205' }),
+        ];
         patchQso.mockResolvedValue({
             kind: 'ok',
-            qso: {
-                id: 9,
-                uuid: 'u-1',
-                call: 'G4ABC',
-                time_on: '143205',
-                band: '40m', // daemon re-derived from an edited freq
-                mode: 'SSB',
-                submode: 'USB', // display literal = submode when present
-                rst_sent: '59',
-                rst_rcvd: '57',
-                name: 'Fred',
-                country: 'England',
-                comment: 'fixed',
-            },
+            qso: { id: 9, uuid: 'u-1', call: 'G4ABC', name: 'NOT-WRITTEN-IN', band: '80m' },
         });
+
         await sessionEdit.save({ name: 'Fred' });
+        await settle();
+
         expect(patchQso).toHaveBeenCalledWith('u-1', { name: 'Fred' });
         expect(sessionEdit.row).toBeNull(); // closed
-        const row = session.qsos[0];
-        expect(row.name).toBe('Fred');
-        expect(row.band).toBe('40m');
-        expect(row.mode).toBe('USB');
-        expect(row.timeOn).toBe('14:32:05');
-        expect(row.comment).toBe('fixed');
+        expect(daemon.reads()).toBe(before + 1);
+        expect(session.qsos[0]).toMatchObject({
+            name: 'Fred',
+            band: '40m',
+            mode: 'USB',
+            timeOn: '14:32:05',
+        });
+    });
+
+    it('writes nothing into the panel of a session that has changed meanwhile (B5)', async () => {
+        const held = { rows: [daemonRow()] };
+        await sessionOf(held);
+        fetchQso.mockResolvedValue({ kind: 'ok', qso: { id: 9, uuid: 'u-1', call: 'G4ABC' } });
+        await sessionEdit.open(session.qsos[0]);
+        let release: (v: unknown) => void = () => undefined;
+        patchQso.mockImplementation(() => new Promise((res) => (release = res)));
+        const inflight = sessionEdit.save({ name: 'Fred' });
+
+        // New: another session is shown, empty, before the edit's answer returns.
+        const NEXT = '01a1f83c-da20-7000-8000-0000000000a2';
+        held.rows = [];
+        setSessionPorts({
+            readRows: () =>
+                Promise.resolve({
+                    kind: 'ok',
+                    archiveId: TEST_ARCHIVE,
+                    generation: 5,
+                    sessionId: NEXT,
+                    members: [],
+                }),
+            readState: () => Promise.resolve(),
+            archive: () => TEST_ARCHIVE,
+        });
+        sessionStateDrawn({
+            archiveId: TEST_ARCHIVE,
+            generation: 5,
+            state: 'open',
+            session: { id: NEXT, openedAt: '2026-11-25T10:00:00Z', sittingStartedAt: null },
+        });
+        await settle();
+        expect(session.qsos).toEqual([]);
+
+        release({ kind: 'ok', qso: { id: 9, uuid: 'u-1', call: 'G4ABC', name: 'Fred' } });
+        await inflight;
+        await settle();
+
+        expect(session.qsos).toEqual([]); // the edited contact is not this session's
+        expect(session.sessionId).toBe(NEXT);
     });
 
     it('keeps the modal open with the daemon message on failure', async () => {
@@ -113,13 +213,12 @@ describe('sessionEdit.save', () => {
         expect(session.qsos[0].callsign).toBe('G4ABC'); // untouched
     });
 
-    it('drops a save that completes after close + reopen (no write onto the new row)', async () => {
+    it('a save that completes after close + reopen leaves the new row and its modal alone', async () => {
         // The race: save row A, close, open row B while A's PATCH is still in
-        // flight. A's completion must be discarded — the QSO is saved
-        // daemon-side either way, but its write-back must NOT land on B, and
-        // B's freshly opened modal must not be force-closed.
-        addSessionQso(sq()); // A: u-1 G4ABC
-        addSessionQso(sq({ uuid: 'u-2', callsign: 'K1XYZ', country: 'USA' })); // B
+        // flight. The QSO is saved daemon-side either way; A's answer must not
+        // change B's row, and B's freshly opened modal must not be force-closed.
+        addSessionRow(sq()); // A: u-1 G4ABC
+        addSessionRow(sq({ uuid: 'u-2', callsign: 'K1XYZ', country: 'USA' })); // B
         const rowA = session.qsos.find((q) => q.uuid === 'u-1');
         const rowB = session.qsos.find((q) => q.uuid === 'u-2');
         if (!rowA || !rowB) throw new Error('setup: session rows missing');
@@ -167,7 +266,7 @@ describe('sessionEdit while the archive is unproven', () => {
     afterEach(() => setSessionActionGate(() => null));
 
     it('open is refused with the reason and fetches nothing', async () => {
-        addSessionQso(sq());
+        addSessionRow(sq());
         setSessionActionGate(() => WAIT);
         await sessionEdit.open(session.qsos[0]);
         expect(fetchQso).not.toHaveBeenCalled();
@@ -176,7 +275,7 @@ describe('sessionEdit while the archive is unproven', () => {
     });
 
     it('save is refused with the reason and sends no PATCH', async () => {
-        addSessionQso(sq());
+        addSessionRow(sq());
         fetchQso.mockResolvedValue({ kind: 'ok', qso: { id: 9, uuid: 'u-1', call: 'G4ABC' } });
         await sessionEdit.open(session.qsos[0]);
         setSessionActionGate(() => WAIT); // a reconnect check began with the modal open

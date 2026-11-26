@@ -2,7 +2,7 @@
 // Export… button. Shared by Phone/CW (a tile) and FT8 (a rail-toggled overlay);
 // Export… opens the download/email dialog.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 
 const fetchQso = vi.fn();
@@ -13,7 +13,23 @@ vi.mock('../api/qso-patch', () => ({
 }));
 
 import SessionPanel from './SessionPanel.svelte';
-import { addSessionQso, _resetSessionForTests } from './session.svelte';
+import {
+    sessionStateDrawn,
+    setSessionPorts,
+    _resetSessionForTests,
+    type SessionRowsReadLike,
+} from './session.svelte';
+import { addSessionRow } from '../../test/sessionRows';
+import { TEST_ARCHIVE } from '../../test/archive';
+import { sessionContactStored } from './session.svelte';
+import {
+    readSessionState,
+    setRecoveryPorts,
+    _resetRecoveryForTests,
+    type SessionReadLike,
+} from '../recovery.svelte';
+import { noteDaemonDate, _resetDaemonClockForTests } from '../api/daemonClock.svelte';
+import { flushSync } from 'svelte';
 import { sessionEdit } from './sessionEdit.svelte';
 import { operate, closeExport } from './state.svelte';
 
@@ -26,14 +42,14 @@ beforeEach(() => {
 });
 
 describe('SessionPanel', () => {
-    it('shows the empty state with Export disabled', () => {
+    it('shows no rows with Export disabled', () => {
         render(SessionPanel);
-        expect(screen.getByText(/No QSOs logged/)).toBeInTheDocument();
+        expect(screen.getByTestId('session-empty')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: /Export/ })).toBeDisabled();
     });
 
     it('lists logged QSOs and Export opens the export dialog', async () => {
-        addSessionQso({
+        addSessionRow({
             callsign: 'W1ABC',
             timeOn: '14:30:00',
             band: '20m',
@@ -63,7 +79,7 @@ describe('SessionPanel', () => {
     });
 
     it('opens the in-place edit modal from a row callsign (no route change)', async () => {
-        addSessionQso({
+        addSessionRow({
             uuid: 'u-9',
             callsign: 'ZS6DX',
             timeOn: '15:00:00',
@@ -88,7 +104,7 @@ describe('SessionPanel', () => {
     });
 
     it('renders a uuid-less row as plain text (no edit affordance)', () => {
-        addSessionQso({
+        addSessionRow({
             callsign: 'OLDROW',
             timeOn: '15:01:00',
             band: '20m',
@@ -105,7 +121,7 @@ describe('SessionPanel', () => {
     });
 
     it('surfaces a hydration failure as a panel error line', async () => {
-        addSessionQso({
+        addSessionRow({
             uuid: 'u-10',
             callsign: 'G0FAIL',
             timeOn: '15:02:00',
@@ -146,9 +162,9 @@ describe('SessionPanel header count', () => {
     // The tally spans BOTH modes — session.qsos is fed by the Phone/CW submit sink
     // and the FT8 ft8-logged SSE alike, so the header must not read as per-mode.
     it('counts FT8 and Phone/CW contacts together', () => {
-        addSessionQso(qso('W1ABC', 'FT8'));
-        addSessionQso(qso('G0XYZ', 'SSB'));
-        addSessionQso(qso('DL1ABC', 'CW'));
+        addSessionRow(qso('W1ABC', 'FT8'));
+        addSessionRow(qso('G0XYZ', 'SSB'));
+        addSessionRow(qso('DL1ABC', 'CW'));
         render(SessionPanel);
         expect(screen.getByRole('heading', { name: /Session \(3\)/ })).toBeInTheDocument();
     });
@@ -179,9 +195,9 @@ describe('SessionPanel callsign search', () => {
     });
 
     it('narrows rows to callsigns containing the typed text, case-insensitive', async () => {
-        addSessionQso(qso('W1ABC'));
-        addSessionQso(qso('VK5GR'));
-        addSessionQso(qso('G0XYZ'));
+        addSessionRow(qso('W1ABC'));
+        addSessionRow(qso('VK5GR'));
+        addSessionRow(qso('G0XYZ'));
         render(SessionPanel);
 
         const box = screen.getByRole('searchbox', { name: /Search session callsigns/ });
@@ -193,8 +209,8 @@ describe('SessionPanel callsign search', () => {
     });
 
     it('clearing the search restores every row', async () => {
-        addSessionQso(qso('W1ABC'));
-        addSessionQso(qso('VK5GR'));
+        addSessionRow(qso('W1ABC'));
+        addSessionRow(qso('VK5GR'));
         render(SessionPanel);
 
         const box = screen.getByRole('searchbox', { name: /Search session callsigns/ });
@@ -207,8 +223,8 @@ describe('SessionPanel callsign search', () => {
     });
 
     it('keeps the header count at the sitting total while filtering', async () => {
-        addSessionQso(qso('W1ABC'));
-        addSessionQso(qso('VK5GR'));
+        addSessionRow(qso('W1ABC'));
+        addSessionRow(qso('VK5GR'));
         render(SessionPanel);
 
         const box = screen.getByRole('searchbox', { name: /Search session callsigns/ });
@@ -218,7 +234,7 @@ describe('SessionPanel callsign search', () => {
     });
 
     it('a no-match search reads differently from an empty session', async () => {
-        addSessionQso(qso('W1ABC'));
+        addSessionRow(qso('W1ABC'));
         render(SessionPanel);
 
         const box = screen.getByRole('searchbox', { name: /Search session callsigns/ });
@@ -256,7 +272,7 @@ describe('SessionPanel list width', () => {
     };
 
     beforeEach(() => {
-        addSessionQso({
+        addSessionRow({
             callsign: 'W1ABC',
             timeOn: '14:30:00',
             band: '20m',
@@ -334,13 +350,13 @@ describe('SessionPanel long callsigns', () => {
     const CLIPPED = ['overflow-hidden', 'text-nowrap', 'text-ellipsis'];
 
     it('gives the Callsign column 136px', () => {
-        addSessionQso(row('u-1'));
+        addSessionRow(row('u-1'));
         render(SessionPanel);
         expect(screen.getByRole('columnheader', { name: 'Callsign' })).toHaveClass('w-34');
     });
 
     it('cuts an editable callsign short inside its cell, never over the next column', () => {
-        addSessionQso(row('u-1'));
+        addSessionRow(row('u-1'));
         render(SessionPanel);
         const button = screen.getByRole('button', { name: LONG });
         // The button is the box that overflows, so it is the one that must be
@@ -350,13 +366,13 @@ describe('SessionPanel long callsigns', () => {
     });
 
     it('cuts a plain-text callsign short too', () => {
-        addSessionQso(row(undefined));
+        addSessionRow(row(undefined));
         render(SessionPanel);
         expect(screen.getByText(LONG).closest('td')).toHaveClass(...CLIPPED);
     });
 
     it('keeps the whole callsign readable in the tooltip, with the edit hint', () => {
-        addSessionQso(row('u-1'));
+        addSessionRow(row('u-1'));
         render(SessionPanel);
         const title = screen.getByRole('button', { name: LONG }).getAttribute('title') ?? '';
         expect(title.startsWith(LONG)).toBe(true);
@@ -364,8 +380,258 @@ describe('SessionPanel long callsigns', () => {
     });
 
     it('keeps the whole callsign readable in the tooltip of a plain-text row', () => {
-        addSessionQso(row(undefined));
+        addSessionRow(row(undefined));
         render(SessionPanel);
         expect(screen.getByText(LONG).closest('td')).toHaveAttribute('title', LONG);
+    });
+});
+
+// What the panel says when it has no rows depends on WHY (W-0029 part 6, B7 and
+// C). "No QSOs logged this session" is one answer among five, and is said only
+// when the daemon has answered that the open session has no contact.
+describe('SessionPanel states', () => {
+    const SESSION = '01a1f83c-da20-7000-8000-0000000000a1';
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+
+    // An open session whose rows read is answered by `answer` (never, when null).
+    function openSession(
+        answer: SessionRowsReadLike | null,
+        openedAt = '2026-11-20T09:15:00Z'
+    ): void {
+        setSessionPorts({
+            readRows: () =>
+                answer === null
+                    ? new Promise<SessionRowsReadLike>(() => {})
+                    : Promise.resolve(answer),
+            readState: () => Promise.resolve(),
+            archive: () => TEST_ARCHIVE,
+        });
+        sessionStateDrawn({
+            archiveId: TEST_ARCHIVE,
+            generation: 4,
+            state: 'open',
+            session: { id: SESSION, openedAt, sittingStartedAt: openedAt },
+        });
+    }
+    const rowsOf = (calls: string[]): SessionRowsReadLike => ({
+        kind: 'ok',
+        archiveId: TEST_ARCHIVE,
+        generation: 4,
+        sessionId: SESSION,
+        members: calls.map((call, i) => ({
+            uuid: `01a21282-0000-7000-8000-00000000000${i}`,
+            call,
+            timeOn: '143000',
+            band: '20m',
+            mode: 'SSB',
+            rstSent: '59',
+            rstRcvd: '59',
+            name: '',
+            country: '',
+            comment: '',
+            emailed: false,
+        })),
+    });
+    const empty = (): string => screen.getByTestId('session-empty').textContent.trim();
+
+    it('before any state is drawn it does not claim an empty session', () => {
+        render(SessionPanel);
+        expect(empty()).toBe('No session is open.');
+    });
+
+    it('says no session is open, with the count at 0 (C2)', () => {
+        sessionStateDrawn({ archiveId: TEST_ARCHIVE, generation: 3, state: 'none', session: null });
+        render(SessionPanel);
+        expect(empty()).toBe('No session is open.');
+        expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent('Session (0)');
+        expect(screen.queryByTestId('session-started')).not.toBeInTheDocument();
+    });
+
+    it('says the archive is being switched (C5)', () => {
+        sessionStateDrawn({
+            archiveId: TEST_ARCHIVE,
+            generation: 3,
+            state: 'archive_switching',
+            session: null,
+        });
+        render(SessionPanel);
+        expect(empty()).toBe('The archive is being switched.');
+    });
+
+    it('says it is reading while the rows are out', () => {
+        openSession(null);
+        render(SessionPanel);
+        expect(empty()).toBe('Reading the session…');
+    });
+
+    it('says the rows could not be read, never that the session is empty (B7)', async () => {
+        openSession({ kind: 'error', message: 'Cannot reach the daemon.' });
+        render(SessionPanel);
+        await flush();
+        expect(empty()).toBe("The session's contacts could not be read. Cannot reach the daemon.");
+        expect(screen.queryByText(/No QSOs logged/)).not.toBeInTheDocument();
+    });
+
+    it('says no QSOs are logged only when the daemon answers an empty session', async () => {
+        openSession(rowsOf([]));
+        render(SessionPanel);
+        await flush();
+        expect(empty()).toBe('No QSOs logged this session.');
+    });
+
+    it('lists the daemon’s rows and says when the session started (ruling 1)', async () => {
+        openSession(rowsOf(['K2B', 'G4A']));
+        render(SessionPanel);
+        await flush();
+        expect(screen.queryByTestId('session-empty')).not.toBeInTheDocument();
+        expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent('Session (2)');
+        expect(screen.getByText('K2B')).toBeInTheDocument();
+        // Not today's start: the date goes with the time.
+        expect(screen.getByTestId('session-started')).toHaveTextContent(
+            'Started 2026-11-20 09:15 UTC'
+        );
+    });
+});
+
+// The same, with the recovery gate reading the state as main.ts wires it
+// (codex-273): the page waits for the next event after a read fails, and while it
+// waits the panel must not say something it does not know.
+describe('SessionPanel through the recovery gate, after a read has failed', () => {
+    const SESSION = '01a1f83c-da20-7000-8000-0000000000a1';
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    const empty = (): string => screen.getByTestId('session-empty').textContent.trim();
+    const state = (generation: number): SessionReadLike => ({
+        kind: 'ok',
+        state: {
+            archiveId: TEST_ARCHIVE,
+            generation,
+            state: 'open',
+            session: {
+                id: SESSION,
+                openedAt: '2026-11-25T09:15:00Z',
+                sittingStartedAt: '2026-11-25T09:15:00Z',
+                contactCount: 0,
+                heldByYou: true,
+            },
+        },
+    });
+    const rowsAt = (generation: number): SessionRowsReadLike => ({
+        kind: 'ok',
+        archiveId: TEST_ARCHIVE,
+        generation,
+        sessionId: SESSION,
+        members: [],
+    });
+    const failed = { kind: 'error', message: 'Cannot reach the daemon.' } as const;
+
+    // The daemon: each read takes the next answer queued for it.
+    let states: SessionReadLike[];
+    let rows: SessionRowsReadLike[];
+    beforeEach(() => {
+        _resetRecoveryForTests();
+        states = [];
+        rows = [];
+        setRecoveryPorts({
+            read: () => Promise.resolve(states.shift() ?? failed),
+            answer: () => Promise.resolve({ kind: 'failed', message: 'not used' }),
+            archive: () => TEST_ARCHIVE,
+            drawn: sessionStateDrawn,
+        });
+        setSessionPorts({
+            readRows: () => Promise.resolve(rows.shift() ?? failed),
+            readState: readSessionState,
+            archive: () => TEST_ARCHIVE,
+        });
+    });
+
+    it('an empty session whose next read fails is not still said to be empty', async () => {
+        states.push(state(4));
+        rows.push(rowsAt(4)); // the daemon answers: no contact
+        await readSessionState();
+        render(SessionPanel);
+        await flush();
+        expect(empty()).toBe('No QSOs logged this session.');
+
+        sessionContactStored(SESSION); // a contact joined; the read for it fails
+        await flush();
+        flushSync();
+
+        expect(empty()).toBe("The session's contacts could not be read. Cannot reach the daemon.");
+    });
+
+    it('rows of a later generation, with the state then unreadable, are not left as "Reading"', async () => {
+        states.push(state(4)); // then the state cannot be read again
+        rows.push(rowsAt(5)); // the daemon has moved on since the state was read
+        await readSessionState();
+        render(SessionPanel);
+        await flush();
+        await flush();
+        flushSync();
+
+        expect(empty()).toMatch(/^The session's contacts could not be read\./);
+        expect(screen.queryByText(/Reading the session/)).not.toBeInTheDocument();
+    });
+});
+
+// "Started 09:15 UTC" is true only while 09:15 is today's (ruling 1). A panel
+// left open across midnight UTC must come to say the date (codex-273), by the
+// daemon's clock.
+describe('SessionPanel start line across midnight UTC', () => {
+    const SESSION = '01a1f83c-da20-7000-8000-0000000000a1';
+    afterEach(() => {
+        vi.useRealTimers();
+        _resetDaemonClockForTests();
+    });
+
+    it('gains its date when the start becomes yesterday’s', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(Date.parse('2026-11-25T23:59:58Z'));
+        _resetDaemonClockForTests();
+        setSessionPorts({
+            readRows: () => new Promise(() => {}),
+            readState: () => Promise.resolve(),
+            archive: () => TEST_ARCHIVE,
+        });
+        sessionStateDrawn({
+            archiveId: TEST_ARCHIVE,
+            generation: 4,
+            state: 'open',
+            session: {
+                id: SESSION,
+                openedAt: '2026-11-25T09:15:00Z',
+                sittingStartedAt: '2026-11-25T09:15:00Z',
+            },
+        });
+        render(SessionPanel);
+        expect(screen.getByTestId('session-started')).toHaveTextContent('Started 09:15 UTC');
+
+        vi.advanceTimersByTime(4000); // now 00:00:02 on the 26th
+        flushSync();
+        expect(screen.getByTestId('session-started')).toHaveTextContent(
+            'Started 2026-11-25 09:15 UTC'
+        );
+    });
+
+    it('judges today by the daemon’s clock, not the window’s', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(Date.parse('2026-11-26T00:03:00Z')); // the window is five minutes fast
+        noteDaemonDate(new Date(Date.parse('2026-11-25T23:58:00Z')).toUTCString());
+        setSessionPorts({
+            readRows: () => new Promise(() => {}),
+            readState: () => Promise.resolve(),
+            archive: () => TEST_ARCHIVE,
+        });
+        sessionStateDrawn({
+            archiveId: TEST_ARCHIVE,
+            generation: 4,
+            state: 'open',
+            session: {
+                id: SESSION,
+                openedAt: '2026-11-25T09:15:00Z',
+                sittingStartedAt: '2026-11-25T09:15:00Z',
+            },
+        });
+        render(SessionPanel);
+        expect(screen.getByTestId('session-started')).toHaveTextContent('Started 09:15 UTC');
     });
 });

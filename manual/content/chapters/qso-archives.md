@@ -162,12 +162,12 @@ running daemon never swaps databases underneath you. Before you confirm:
   contact form, the log view — belongs to the new archive. Unsaved Settings
   edits are lost, so save first.
 
-Each archive keeps its own **Session** list in a browser tab. After a switch
-the Session panel, its count and its edit and export show only the contacts
-logged in that archive during this sitting, and an archive you have not used
-in this tab starts with an empty list even if its logbook has contacts.
-Switch back and that archive's list returns. Your logged QSOs are never moved
-or deleted by a switch; the Session list is only this tab's view of them.
+Each archive has its own operating **Session**, kept by the daemon in that
+archive. A switch ends the session in the archive you leave. After it the
+Session panel, its count and its edit and export show the session of the
+archive you arrived at, which starts empty even if its logbook has contacts.
+Your logged QSOs are never moved or deleted by a switch; a session is only a
+list of the contacts made in one stretch of operating.
 While the page is still confirming which archive the daemon serves, Session
 edit, export and email wait until it has. The first time a tab loads after
 the update that introduced this, its old Session list is cleared and a notice

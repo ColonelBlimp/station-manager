@@ -10,19 +10,17 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
-	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // What the Session panel reads (ADR 0100 §7, §8; W-0029 part 6): the open
-// session's contacts, one contact of it, and the closed sessions Continue
-// offers. The storage side is internal/database/sqlite/operating_session_read.go.
+// session's contacts and the closed sessions Continue offers. The storage side is internal/database/sqlite/operating_session_read.go.
 //
 // Each answer names the served archive, and carries the session generation it
 // was read at with the session's id, all of one snapshot of the file. A window
 // draws an answer only for the archive it has proven and the session and
 // generation it is showing.
 //
-// These three read the file and nothing else. They do NOT take the admission's
+// These two read the file and nothing else. They do NOT take the admission's
 // order, unlike GET /v1/operating-session, which has to name the state for its
 // caller: an app's start can hold that order for as long as earned logging
 // takes, and a read that waited behind it would keep a request slot for
@@ -40,16 +38,16 @@ const (
 
 func (s *Server) registerOperatingSessionReads(apiMux *routeMux) {
 	apiMux.HandleFunc("GET /v1/operating-session/members", s.handleOperatingSessionMembers)
-	apiMux.HandleFunc("GET /v1/operating-session/members/{uuid}", s.handleOperatingSessionMember)
 	apiMux.HandleFunc("GET /v1/operating-session/closed", s.handleOperatingSessionClosed)
 }
 
 // sessionMemberBody is one contact as the panel draws it.
 type sessionMemberBody struct {
 	UUID string `json:"uuid"`
-	// Revision is the contact's edit counter (ADR 0050): of two answers about
-	// one contact, the one with the higher counter is the later. The session
-	// generation says nothing of this: an edit moves no generation.
+	// Revision is the contact's edit counter (ADR 0050). The session
+	// generation says nothing of a contact's own changes: an edit moves no
+	// generation. The page does not order answers by this counter: it reads
+	// the whole list, one read at a time, and draws them in the order asked.
 	Revision int64  `json:"revision"`
 	Call     string `json:"call"`
 	QsoDate  string `json:"qso_date"`
@@ -92,13 +90,6 @@ type sessionMembersResponse struct {
 	Members    []sessionMemberBody `json:"members"`
 }
 
-type sessionMemberResponse struct {
-	ArchiveID  string             `json:"archive_id"`
-	Generation int64              `json:"generation"`
-	SessionID  *string            `json:"session_id"`
-	Member     *sessionMemberBody `json:"member"`
-}
-
 type closedSessionBody struct {
 	ID                     string     `json:"id"`
 	LogbookUUID            string     `json:"logbook_uuid"`
@@ -138,30 +129,6 @@ func (s *Server) handleOperatingSessionMembers(w http.ResponseWriter, r *http.Re
 		SessionID: sessionIDOrNull(got.SessionID), Members: make([]sessionMemberBody, 0, len(got.Members))}
 	for _, q := range got.Members {
 		resp.Members = append(resp.Members, memberBody(q))
-	}
-	s.writeJSON(w, http.StatusOK, resp)
-}
-
-// handleOperatingSessionMember answers one contact of the open session. A
-// contact that is not a member that is shown (deleted, of another session or
-// of none, or not in the file) is 200 with a member of null: "it is not in the
-// session" is an answer a window acts on, not an error.
-func (s *Server) handleOperatingSessionMember(w http.ResponseWriter, r *http.Request) {
-	const op errors.Op = "api.handleOperatingSessionMember"
-	uuid := r.PathValue("uuid")
-	if !utils.IsValidUUIDv7(uuid) {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "uuid must be a QSO's UUID", op)
-		return
-	}
-	got, err := s.db.OperatingSessionMemberWithContext(r.Context(), uuid)
-	if err != nil {
-		s.sessionReadFailed(w, op, "the operating session's contact", err)
-		return
-	}
-	resp := sessionMemberResponse{ArchiveID: s.servedArchiveID, Generation: got.Generation, SessionID: sessionIDOrNull(got.SessionID)}
-	if got.Member != nil {
-		row := memberBody(*got.Member)
-		resp.Member = &row
 	}
 	s.writeJSON(w, http.StatusOK, resp)
 }

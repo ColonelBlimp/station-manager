@@ -136,11 +136,12 @@ func (s *Server) publishSessionGeneration(generation int64) {
 // completion logging already earned before it judges a leftover session empty
 // (appAdmission.awaitBeforeStart).
 //
-// IT IS NOT CALLED BY THE DAEMON'S ORDINARY START (operator ruling 2026-11-24,
-// part 5's question 1). Membership reaches the station with part 6, whose
-// change calls this; until then only tests do, and a contact joins nothing.
-// It is the one place the connection is made: no configuration key and no
-// switch an operator could set.
+// The daemon's ordinary start calls it, once, on the server it has just built
+// (cmd/smd; W-0029 part 6, G1). Through part 5 it was deliberately left
+// uncalled (operator ruling 2026-11-24), so that the membership reached the
+// station together with the page that reads it. It is the one place the
+// connection is made: no configuration key and no switch an operator could
+// set.
 func (s *Server) ConnectSessionMembership() {
 	s.qso.SetSessionMembership(&qsoservice.SessionMembership{
 		Holder:   s.admission.holding,

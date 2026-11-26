@@ -26,13 +26,25 @@ const question = (generation: number, id = S0, archiveId = HOME): SessionStateLi
     archiveId,
     generation,
     state: 'recovery_pending',
-    session: { id, openedAt: '2026-11-20T09:15:00Z', contactCount: 3, heldByYou: false },
+    session: {
+        id,
+        openedAt: '2026-11-20T09:15:00Z',
+        sittingStartedAt: '2026-11-20T09:15:00Z',
+        contactCount: 3,
+        heldByYou: false,
+    },
 });
 const held = (generation: number, id = S0, archiveId = HOME): SessionStateLike => ({
     archiveId,
     generation,
     state: 'open',
-    session: { id, openedAt: '2026-11-20T09:15:00Z', contactCount: 3, heldByYou: true },
+    session: {
+        id,
+        openedAt: '2026-11-20T09:15:00Z',
+        sittingStartedAt: '2026-11-20T09:15:00Z',
+        contactCount: 3,
+        heldByYou: true,
+    },
 });
 const noSession = (
     generation: number,
@@ -49,6 +61,8 @@ let reads: Array<SessionReadLike | Promise<SessionReadLike>>;
 let answers: Array<SessionAnswerLike | Promise<SessionAnswerLike>>;
 let pressed: Array<[string, number, string]>;
 let bound: string | null;
+// Every state the gate handed on as drawn (W-0029 part 6): the Session follows these.
+let handed: SessionStateLike[];
 
 const ok = (state: SessionStateLike): SessionReadLike => ({ kind: 'ok', state });
 const failed: SessionReadLike = { kind: 'error', message: 'Cannot reach the daemon.' };
@@ -65,7 +79,9 @@ beforeEach(() => {
     answers = [];
     pressed = [];
     bound = HOME;
+    handed = [];
     setRecoveryPorts({
+        drawn: (state) => handed.push(state),
         read: () => {
             const next = reads.shift();
             if (next === undefined) throw new Error('the test queued no read');
@@ -452,5 +468,45 @@ describe('an obsolete failure does not take away what was drawn after it was sen
         await first;
         expect(recoveryGate()).toBe(null);
         expect(recovery.status).toBe('clear');
+    });
+});
+
+// The Session the workspace shows follows the gate's one rule (W-0029 part 6,
+// B2): it is told each state the gate draws, and no state the gate refuses. So
+// the panel can never be of another archive's session, of one read before the
+// archive was proven, or of a state older than the one on screen.
+describe('each state drawn is handed on, and no state refused is', () => {
+    it('hands on a read, an applied answer and a stale refusal, in the order drawn', async () => {
+        reads.push(ok(question(4)));
+        await readSessionState();
+        answers.push({ kind: 'applied', state: held(5) });
+        await answerRecovery('continue');
+        reads.push(ok(noSession(6)));
+        await readSessionState();
+
+        expect(handed.map((s) => [s.state, s.generation])).toEqual([
+            ['recovery_pending', 4],
+            ['open', 5],
+            ['none', 6],
+        ]);
+        expect(handed[1].session?.sittingStartedAt).toBe('2026-11-20T09:15:00Z');
+    });
+
+    it('hands on nothing it does not draw', async () => {
+        reads.push(ok(held(5)));
+        await readSessionState();
+        handed = [];
+
+        reads.push(ok(held(4))); // older than the one shown
+        await readSessionState();
+        reads.push(ok(held(9, S1, OTHER))); // another archive's
+        await readSessionState();
+        reads.push(failed);
+        await readSessionState();
+        bound = null; // no archive proven when the read is sent
+        reads.push(ok(held(7)));
+        await readSessionState();
+
+        expect(handed).toEqual([]);
     });
 });

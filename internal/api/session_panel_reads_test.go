@@ -42,13 +42,6 @@ type membersView struct {
 	Members    *[]memberRowView `json:"members"`
 }
 
-type memberView struct {
-	ArchiveID  string         `json:"archive_id"`
-	Generation int64          `json:"generation"`
-	SessionID  *string        `json:"session_id"`
-	Member     *memberRowView `json:"member"`
-}
-
 type closedSessionView struct {
 	ID                     string  `json:"id"`
 	LogbookUUID            string  `json:"logbook_uuid"`
@@ -128,43 +121,6 @@ func TestSessionPanel_TheMembersReadWithNoSessionOpen(t *testing.T) {
 	}
 	if got.SessionID != nil || got.Members == nil || len(*got.Members) != 0 || got.ArchiveID != testServedArchive {
 		t.Fatalf("with no session open the read is %+v; want a null session and an empty list", got)
-	}
-}
-
-// One contact of the open session by its uuid; a contact that is not a member
-// that is shown answers 200 with no row, so that "it is not in the session" is
-// an answer and not an error.
-func TestSessionPanel_TheMemberRead(t *testing.T) {
-	b := newMemberBed(t, true)
-	b.mustBeAdmitted(lifeA)
-	state := b.view(lifeA)
-	member := b.live(lifeA)
-	outside := b.log(lifeA, b.def, b.otherUUID)
-
-	var got memberView
-	if status := b.read(lifeA, "/v1/operating-session/members/"+b.uuidOf(member), &got); status != http.StatusOK {
-		t.Fatalf("the member read answered %d", status)
-	}
-	if got.Member == nil || got.Member.UUID != b.uuidOf(member) || got.SessionID == nil || *got.SessionID != state.Session.ID || got.Generation != state.Generation || got.ArchiveID != testServedArchive {
-		t.Fatalf("the member read is %+v with %+v; want the contact, in session %s at generation %d", got, got.Member, state.Session.ID, state.Generation)
-	}
-
-	b.exec(`UPDATE qso SET deleted_at = datetime('now') WHERE id = ?`, member)
-	for what, uuid := range map[string]string{
-		"a deleted member":              b.uuidOf(member),
-		"a contact in no session":       b.uuidOf(outside.id),
-		"a uuid the file does not hold": "01920000-0000-7000-8000-0000000000ff",
-	} {
-		var none memberView
-		if status := b.read(lifeA, "/v1/operating-session/members/"+uuid, &none); status != http.StatusOK {
-			t.Fatalf("%s answered %d; want 200 with no row", what, status)
-		}
-		if none.Member != nil || none.SessionID == nil || *none.SessionID != state.Session.ID {
-			t.Fatalf("%s read as %+v; want no row, in session %s", what, none.Member, state.Session.ID)
-		}
-	}
-	if status, body, _ := b.appDo(t, b.c, lifeA, http.MethodGet, "/v1/operating-session/members/not-a-uuid", ""); status != http.StatusBadRequest {
-		t.Fatalf("a malformed uuid answered %d %s; want 400", status, body)
 	}
 }
 
@@ -333,17 +289,16 @@ func TestSessionPanel_AClosedSessionThatCannotBeReadFailsTheList(t *testing.T) {
 	}
 }
 
-// The three reads take no part in the admission's order: with it held, as an
+// The reads take no part in the admission's order: with it held, as an
 // app's start can hold it for as long as earned logging takes, they answer. So
 // none of them can keep a request slot behind a start that is waiting.
 func TestSessionPanel_TheReadsDoNotWaitForTheAdmissionsOrder(t *testing.T) {
 	b := newMemberBed(t, true)
 	b.mustBeAdmitted(lifeA)
-	qso := b.live(lifeA)
-	uuid := b.uuidOf(qso)
+	b.live(lifeA)
 	release := b.srv.HoldSessionOrder()
 	defer release()
-	for _, path := range []string{"/v1/operating-session/members", "/v1/operating-session/members/" + uuid, "/v1/operating-session/closed"} {
+	for _, path := range []string{"/v1/operating-session/members", "/v1/operating-session/closed"} {
 		done := make(chan int, 1)
 		go func() {
 			status, _, _ := b.appDo(t, b.c, lifeA, http.MethodGet, path, "")
@@ -360,9 +315,9 @@ func TestSessionPanel_TheReadsDoNotWaitForTheAdmissionsOrder(t *testing.T) {
 func TestSessionPanel_AReadThatFailsIsAnError(t *testing.T) {
 	b := newMemberBed(t, true)
 	b.mustBeAdmitted(lifeA)
-	uuid := b.uuidOf(b.live(lifeA))
+	b.live(lifeA)
 	b.exec(`ALTER TABLE operating_session_member RENAME TO operating_session_member_gone`)
-	for _, path := range []string{"/v1/operating-session/members", "/v1/operating-session/members/" + uuid, "/v1/operating-session/closed"} {
+	for _, path := range []string{"/v1/operating-session/members", "/v1/operating-session/closed"} {
 		status, body, _ := b.appDo(t, b.c, lifeA, http.MethodGet, path, "")
 		if status != http.StatusServiceUnavailable || errorCode(t, body) != operatingSessionUnavailable {
 			t.Fatalf("GET %s on a file that cannot be read answered %d %s; want 503 %s", path, status, body, operatingSessionUnavailable)

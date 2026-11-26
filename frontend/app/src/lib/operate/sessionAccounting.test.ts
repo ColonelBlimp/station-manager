@@ -113,7 +113,6 @@ describe('emailReport', () => {
         expect(emailReport(sel, TO, lists(['a', 'b'], [], ['a', 'b']))).toEqual({
             level: 'info',
             text: `Sent 2 QSOs to ${TO}`,
-            mark: ['a', 'b'],
         });
     });
 
@@ -122,7 +121,6 @@ describe('emailReport', () => {
         expect(emailReport(sel, TO, lists(['a', 'b', 'c'], ['d'], ['a', 'b', 'c']))).toEqual({
             level: 'warn',
             text: `Sent 3 of 4 QSOs to ${TO}; 1 could not be found in this archive.`,
-            mark: ['a', 'b', 'c'],
         });
     });
 
@@ -138,7 +136,6 @@ describe('emailReport', () => {
         expect(emailReport(sel, TO, lists(['a', 'b', 'c'], [], ['a', 'b']))).toEqual({
             level: 'warn',
             text: `Sent 3 QSOs to ${TO}, but only 2 were recorded as emailed; the rest may be offered again.`,
-            mark: ['a', 'b'],
         });
     });
 
@@ -154,7 +151,6 @@ describe('emailReport', () => {
         expect(emailReport(sel, TO, lists(['a', 'b'], [], []))).toEqual({
             level: 'warn',
             text: `Sent 2 QSOs to ${TO}, but none were recorded as emailed.`,
-            mark: [],
         });
     });
 
@@ -163,11 +159,10 @@ describe('emailReport', () => {
         expect(emailReport(sel, TO, lists(['a'], [], ['a']))).toEqual({
             level: 'info',
             text: `Sent 1 QSO to ${TO}. Duplicate selections were counted once.`,
-            mark: ['a'],
         });
     });
 
-    const UNCONFIRMED = `Email sent to ${TO}, but the daemon did not confirm which QSOs it contained. No Session rows were marked as emailed.`;
+    const UNCONFIRMED = `Email sent to ${TO}, but the daemon did not confirm which QSOs it contained. The Session shows the contacts it recorded as emailed.`;
 
     it.each([
         ['absent or malformed lists', null],
@@ -183,7 +178,7 @@ describe('emailReport', () => {
         ['nothing sent', lists([], ['a', 'b', 'c'], [])],
     ])('%s: rejected before anything is marked', (_name, l) => {
         const sel = snapshotSelection(rows('a', 'b', 'c'));
-        expect(emailReport(sel, TO, l)).toEqual({ level: 'warn', text: UNCONFIRMED, mark: [] });
+        expect(emailReport(sel, TO, l)).toEqual({ level: 'warn', text: UNCONFIRMED });
     });
 
     it('an unconfirmed send still states what the tab knows, and marks nothing', () => {
@@ -191,7 +186,6 @@ describe('emailReport', () => {
         expect(emailReport(sel, TO, null)).toEqual({
             level: 'warn',
             text: `${UNCONFIRMED} 1 has no QSO ID. Duplicate selections were counted once.`,
-            mark: [],
         });
     });
 });

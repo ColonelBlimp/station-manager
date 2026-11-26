@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ARCHIVE_HEADER, setBoundArchive } from './archive-guard';
 import { TEST_ARCHIVE } from '../../test/archive';
-import { answerOperatingSession, fetchOperatingSession } from './operating-session';
+import {
+    answerOperatingSession,
+    fetchOperatingSession,
+    fetchSessionMembers,
+} from './operating-session';
 
 // W-0029 part 4, second slice: the session's read and its two controls as the
 // page sends them. The read is never drawn as an empty session when it fails;
@@ -66,6 +70,7 @@ describe('fetchOperatingSession', () => {
                 session: {
                     id: SESSION,
                     openedAt: '2026-11-20T09:15:00Z',
+                    sittingStartedAt: '2026-11-20T09:15:00Z',
                     contactCount: 3,
                     heldByYou: false,
                 },
@@ -220,5 +225,114 @@ describe('answerOperatingSession', () => {
         const out = await answerOperatingSession('new', 4, SESSION);
         expect(out.kind).toBe('failed');
         expect(sent).toEqual([]);
+    });
+});
+
+// The Session's rows (W-0029 part 6): GET /v1/operating-session/members.
+describe('fetchSessionMembers', () => {
+    const U1 = '01a21282-f185-7377-a3eb-cf669a088911';
+    const U2 = '01a21282-f185-7377-a3eb-cf669a088912';
+    const member = (uuid: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+        uuid,
+        revision: 0,
+        call: 'G4ABC',
+        qso_date: '20261125',
+        time_on: '143005',
+        band: '20m',
+        mode: 'MFSK',
+        submode: 'FT4',
+        rst_sent: '-10',
+        rst_rcvd: '-05',
+        name: 'Ann',
+        country: 'England',
+        comment: 'qrp',
+        emailed: true,
+        ...over,
+    });
+    const answer = (members: unknown[], over: Record<string, unknown> = {}): unknown => ({
+        archive_id: TEST_ARCHIVE,
+        generation: 7,
+        session_id: SESSION,
+        members,
+        ...over,
+    });
+
+    it('reads the rows in the daemon’s order, with their archive, session and generation', async () => {
+        stub(200, answer([member(U2), member(U1, { submode: undefined, emailed: false })]));
+        const out = await fetchSessionMembers();
+        expect(sent.map((r) => [r.method, r.url])).toEqual([
+            ['GET', '/v1/operating-session/members'],
+        ]);
+        expect(out).toEqual({
+            kind: 'ok',
+            archiveId: TEST_ARCHIVE,
+            generation: 7,
+            sessionId: SESSION,
+            members: [
+                {
+                    uuid: U2,
+                    call: 'G4ABC',
+                    timeOn: '143005',
+                    band: '20m',
+                    mode: 'MFSK',
+                    submode: 'FT4',
+                    rstSent: '-10',
+                    rstRcvd: '-05',
+                    name: 'Ann',
+                    country: 'England',
+                    comment: 'qrp',
+                    emailed: true,
+                },
+                expect.objectContaining({ uuid: U1, submode: undefined, emailed: false }),
+            ],
+        });
+    });
+
+    it('reads "no session open" as that, not as an error', async () => {
+        stub(200, answer([], { session_id: null }));
+        expect(await fetchSessionMembers()).toEqual({
+            kind: 'ok',
+            archiveId: TEST_ARCHIVE,
+            generation: 7,
+            sessionId: null,
+            members: [],
+        });
+    });
+
+    // A row left out would be drawn as the whole session: an answer the page
+    // cannot read in full is an error, never a shorter list.
+    it.each([
+        ['one row has no uuid', answer([member(U1), member('not-a-uuid')])],
+        ['one row has no emailed mark', answer([member(U1, { emailed: undefined })])],
+        ['one row has a number for a call', answer([member(U1, { call: 7 })])],
+        ['members is not a list', answer([], { members: {} })],
+        ['there is no generation', answer([member(U1)], { generation: undefined })],
+        ['the session id is not one', answer([member(U1)], { session_id: 'x' })],
+        ['the archive id is not one', answer([member(U1)], { archive_id: 'x' })],
+        ['the body is not an object', [member(U1)]],
+    ])('is an error, not a shorter list, when %s', async (_why, body) => {
+        stub(200, body);
+        expect(await fetchSessionMembers()).toEqual({
+            kind: 'error',
+            message: 'The daemon answered with session contacts this page cannot read.',
+        });
+    });
+
+    it('is an error with the daemon’s words when the daemon refuses', async () => {
+        stub(503, { code: 'operating_session_unavailable', message: 'could not be read' });
+        const out = await fetchSessionMembers();
+        expect(out.kind).toBe('error');
+        expect(out.kind === 'error' && out.message).toMatch(/could not be read/);
+    });
+
+    it('is an error when the daemon cannot be reached', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(new TypeError('network')))
+        );
+        expect(await fetchSessionMembers()).toEqual({
+            kind: 'error',
+            message: 'Cannot reach the daemon.',
+        });
     });
 });

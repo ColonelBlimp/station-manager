@@ -6,22 +6,19 @@
  * no route change, so the FT8 subscription (and the mic) stay held.
  *
  * The session list carries a trimmed row, so open() hydrates the full QSO by
- * uuid first (GET /v1/qso/{uuid}); save() PATCHes and overlays the daemon's
- * canonical merged result back onto the session row.
+ * uuid first (GET /v1/qso/{uuid}); save() PATCHes it.
+ *
+ * The saved contact is not written into the list here (W-0029 part 6, A6, B5).
+ * The list is what the page has read of the daemon's session: a save asks for
+ * the rows to be read again, and the row then shows the daemon's merged
+ * contact. So an answer that returns after the session has changed has nowhere
+ * to be written: the new session's rows are the new session's.
  */
 
 import { fetchQso, patchQso, type QsoPatch } from '../api/qso-patch';
 import type { LogbookQso } from '../api/logbooks';
-import { updateSessionQso, type SessionQso, sessionModeLiteral } from './session.svelte';
+import { refreshSessionRows, type SessionQso } from './session.svelte';
 import { sessionActionBlock } from './archiveStores.svelte';
-
-/** ADIF HHMM[SS] → the session list's HH:MM[:SS] display shape. */
-function displayTime(t: string | undefined, fallback: string): string {
-    if (t === undefined || !/^\d{4}(\d{2})?$/.test(t)) return fallback;
-    const parts = [t.slice(0, 2), t.slice(2, 4)];
-    if (t.length === 6) parts.push(t.slice(4, 6));
-    return parts.join(':');
-}
 
 class SessionEditState {
     /** The hydrated row the modal edits; null = modal closed. */
@@ -34,13 +31,9 @@ class SessionEditState {
     /** True while the row fetch is in flight (row click → modal open). */
     opening: boolean = $state(false);
 
-    /** The session-list id of the row being edited (the write-back target). */
-    #sessionId = 0;
-
     /** Bumped on every open/close. A save captures it before the PATCH and
-     *  discards its completion if the modal was closed (or reopened on a
-     *  different row) meanwhile — otherwise row A's returned data would be
-     *  written onto whichever row #sessionId points at by then. */
+     *  leaves the modal alone if it was closed (or reopened on another row)
+     *  meanwhile: row A's answer must not close or mark the edit of row B. */
     #gen = 0;
 
     async open(sq: SessionQso): Promise<void> {
@@ -59,7 +52,6 @@ class SessionEditState {
             this.openError = `Cannot load ${sq.callsign} for editing: ${out.message}`;
             return;
         }
-        this.#sessionId = sq.id;
         this.#gen++;
         this.error = null;
         this.row = out.qso;
@@ -84,37 +76,19 @@ class SessionEditState {
             this.error = 'This QSO has no id and cannot be edited.';
             return;
         }
-        // Capture the write-back target NOW — after the await, #sessionId may
-        // belong to a different row (close + reopen during the PATCH).
-        const sessionId = this.#sessionId;
         const gen = this.#gen;
         this.saving = true;
         this.error = null;
         const out = await patchQso(uuid, patch);
-        if (gen !== this.#gen) return; // modal moved on — the QSO is saved; drop the write-back
+        // The contact is saved whether or not the modal is still on it: the rows
+        // are read again either way, and show what the daemon holds.
+        if (out.kind === 'ok') refreshSessionRows();
+        if (gen !== this.#gen) return; // the modal moved on
         this.saving = false;
         if (out.kind !== 'ok') {
             this.error = out.message;
             return;
         }
-        // Write the daemon's canonical merged row back onto the session list.
-        // Session rows show the operator-friendly mode literal (USB, FT8) —
-        // that's ADIF submode when present, mode otherwise. Band may have been
-        // re-derived from freq server-side, so overlay it too.
-        const q = out.qso;
-        const overlay: Partial<Omit<SessionQso, 'id'>> = {
-            callsign: q.call ?? '',
-            band: q.band ?? '',
-            mode: sessionModeLiteral(q.mode, q.submode),
-            rstSent: q.rst_sent ?? '',
-            rstRcvd: q.rst_rcvd ?? '',
-            name: q.name ?? '',
-            country: q.country ?? '',
-            comment: q.comment ?? '',
-        };
-        const t = displayTime(q.time_on, '');
-        if (t !== '') overlay.timeOn = t;
-        updateSessionQso(sessionId, overlay);
         this.close();
     }
 }

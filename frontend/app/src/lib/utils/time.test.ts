@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDurationHms } from './time';
+import { formatDurationHms, formatSessionStart } from './time';
 
 describe('formatDurationHms', () => {
     it('formats zero as 00:00:00', () => {
@@ -36,5 +36,29 @@ describe('formatDurationHms', () => {
 
     it('clamps negative inputs to 00:00:00', () => {
         expect(formatDurationHms(-1)).toBe('00:00:00');
+    });
+});
+
+// The Session panel's "Started …" (W-0029 part 6, operator ruling 2026-11-25).
+describe('formatSessionStart', () => {
+    const now = new Date('2026-11-25T23:59:30Z');
+
+    it('gives the time alone for a start today, in UTC', () => {
+        expect(formatSessionStart('2026-11-25T09:15:42Z', now)).toBe('09:15 UTC');
+        expect(formatSessionStart('2026-11-25T00:00:00Z', now)).toBe('00:00 UTC');
+    });
+
+    it('puts the date first when the start is not today’s', () => {
+        expect(formatSessionStart('2026-11-24T23:59:59Z', now)).toBe('2026-11-24 23:59 UTC');
+        expect(formatSessionStart('2026-11-20T09:15:00Z', now)).toBe('2026-11-20 09:15 UTC');
+    });
+
+    it('judges "today" in UTC, not in the window’s zone', () => {
+        // 01:30 local on the 26th at +02:00 is 23:30 UTC on the 25th: today.
+        expect(formatSessionStart('2026-11-26T01:30:00+02:00', now)).toBe('23:30 UTC');
+    });
+
+    it('gives nothing for a start it cannot read', () => {
+        expect(formatSessionStart('not a time', now)).toBe('');
     });
 });

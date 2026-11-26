@@ -457,16 +457,23 @@ func TestSwitch_AFailureAfterTheCloseOpensOneNewSessionAndGivesOperationBack(t *
 		t.Fatal("TX admission is still sealed after the failed switch")
 	}
 
-	// Retries do not pile sessions up: each closes the empty session the last
-	// one opened, which is removed.
+	// Retries do not pile sessions up: each closes the session the last one
+	// opened, and an empty one is removed. The contact just logged joined the
+	// session the first failure opened (the membership is connected from part
+	// 6), so the first retry closes a session with a contact, which is kept;
+	// the second closes an empty one, which is not.
 	for i := 0; i < 2; i++ {
 		b.f.configDir(t, 0o500, func() { code, body = b.activate(t, other) })
 		if !strings.Contains(string(body), "activation_persist_failed") {
 			t.Fatalf("retry %d = %d %s; want activation_persist_failed", i, code, body)
 		}
 	}
-	if total := b.count(t, `SELECT COUNT(*) FROM operating_session`); total != 2 || b.openSessions(t) != 1 {
-		t.Fatalf("%d sessions, %d open, after three failed switches; want the one with a contact and one open", total, b.openSessions(t))
+	if total := b.count(t, `SELECT COUNT(*) FROM operating_session`); total != 3 || b.openSessions(t) != 1 {
+		t.Fatalf("%d sessions, %d open, after three failed switches; want the two that had a contact and one open", total, b.openSessions(t))
+	}
+	if empty := b.count(t, `SELECT COUNT(*) FROM operating_session s WHERE s.closed_at IS NOT NULL
+		AND NOT EXISTS (SELECT 1 FROM operating_session_member m WHERE m.session_id = s.id)`); empty != 0 {
+		t.Fatalf("%d closed session(s) with no contact were kept; want none: a failed switch's empty session is removed", empty)
 	}
 }
 

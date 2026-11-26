@@ -1,55 +1,44 @@
 <!--
-    SessionTimer — operating-session length as HH:MM:SS, ticking once per
-    second. Ported verbatim from the logging SPA (session-28 persistence model).
+    SessionTimer — how long the current sitting of the operating session has
+    run, as HH:MM:SS, ticking once a second (W-0029 part 6, criteria D).
 
-    Session start is stored in sessionStorage under `sm.session.startedAt`
-    (epoch ms), whose lifecycle maps cleanly to "operator session":
-      - Page refresh (deliberate or accidental F5) → start survives, session
-        continues (an accidental reload mid-contest must not reset the timer).
-      - Tab / browser close → sessionStorage clears; next open is fresh.
-      - New tab → fresh session per tab (sessionStorage is per-tab).
+    The start is the daemon's: `sitting_started_at` of the open session, as the
+    page last read it (session.svelte.ts). So a reload and a daemon restart do
+    not change what it shows, a second window would show the same, and New and
+    Continue start it again at zero. Nothing is kept in the browser's storage.
 
-    Distinct from any localStorage the app uses: localStorage is cross-session
-    operator preference; sessionStorage spans reloads but not the intent to
-    start fresh. Renders bare text so the parent (the header) owns the visual
-    treatment. Hours grow past 99 for long sessions (Field Day / contest).
+    The time since that start is counted on the DAEMON's clock too (daemonNowMs,
+    calibrated from the `Date` of the daemon's answers): a start stamped by one
+    clock and a "now" read from another would show the difference between the
+    two clocks as session time. Before any answer has calibrated it, that is the
+    window's own clock, the best there is.
+
+    With no session open it shows no time (operator ruling 2026-11-25): not
+    zeros, and never a count from when the window loaded. The header keeps its
+    place for it. Renders bare text so the header owns the visual treatment.
+    Hours grow past 99 for long sittings (Field Day / contest).
 -->
 <script lang="ts">
     import { onDestroy } from 'svelte';
     import { formatDurationHms } from '../utils/time';
+    import { session } from '../operate/session.svelte';
+    import { daemonNowMs } from '../api/daemonClock.svelte';
 
-    const SESSION_KEY = 'sm.session.startedAt';
-
-    function loadOrInitStart(): number {
-        try {
-            const raw = sessionStorage.getItem(SESSION_KEY);
-            if (raw !== null) {
-                const n = Number(raw);
-                if (Number.isFinite(n)) return n;
-            }
-        } catch {
-            // sessionStorage unavailable (private-mode edge cases) — fall
-            // through to an in-memory start (refresh-survival is what we lose).
-        }
-        const fresh = Date.now();
-        try {
-            sessionStorage.setItem(SESSION_KEY, String(fresh));
-        } catch {
-            // Write failed — in-memory state is still correct for this page life.
-        }
-        return fresh;
-    }
-
-    const startedAt = loadOrInitStart();
-    let now = $state(startedAt);
+    let now = $state(daemonNowMs());
 
     const tickerId = setInterval(() => {
-        now = Date.now();
+        now = daemonNowMs();
     }, 1000);
 
     onDestroy(() => clearInterval(tickerId));
 
-    const elapsed = $derived(formatDurationHms(now - startedAt));
+    const elapsed = $derived.by(() => {
+        if (session.sittingStartedAt === null) return '';
+        const started = Date.parse(session.sittingStartedAt);
+        if (Number.isNaN(started)) return '';
+        // A start a moment ahead of the clock's last reading never shows a negative time.
+        return formatDurationHms(Math.max(0, now - started));
+    });
 </script>
 
-<span class="tabular-nums text-base">{elapsed}</span>
+<span class="tabular-nums text-base" data-testid="session-timer">{elapsed}</span>

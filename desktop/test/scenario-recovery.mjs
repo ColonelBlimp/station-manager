@@ -158,6 +158,18 @@ const SETTLED = `new Promise((r) => setTimeout(() => setTimeout(() => r(true), 5
 const press = (label) =>
     `(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === ${JSON.stringify(label)});
         if (!b) return false; b.click(); return true; })()`;
+// What the page shows as the Session's count: the rail's badge ("1 QSO this session") or,
+// where the panel is open, its heading ("Session (1)"). '' while it shows none.
+const SESSION_COUNT = `(() => {
+    const labelled = [...document.querySelectorAll('[title], [aria-label]')]
+        .map((e) => e.getAttribute('title') ?? e.getAttribute('aria-label') ?? '')
+        .find((t) => / QSOs? this session$/.test(t));
+    if (labelled) return labelled;
+    return [...document.querySelectorAll('h3')]
+        .map((e) => e.textContent.replace(/\\s+/g, ' ').trim())
+        .find((t) => /^Session \\([1-9]/.test(t)) ?? '';
+})()`;
+const ONE_CONTACT = (t) => t === '1 QSO this session' || t.startsWith('Session (1)');
 // One contact, logged by smd's own route as the page's submit would name it.
 export const LOG_ONE = `(async () => {
     const version = await (await fetch('/v1/version', { cache: 'no-store' })).json();
@@ -217,26 +229,69 @@ export async function runRecovery() {
         );
         const sessionId = opened.session?.id ?? '';
 
-        // 2. One contact, a member of that session.
+        // 2. One contact, logged in the app. smd puts it in that session: the
+        //    scenario writes nothing to the archive (W-0029 part 6, G3; until then
+        //    the membership was not connected and the scenario wrote the member
+        //    row itself). The row read here is the one the submit wrote.
         const logged = await js(first.win, LOG_ONE);
-        const db = new DatabaseSync(path.join(data, 'db', 'station-manager.db'));
+        let memberRows = -1;
+        const db = new DatabaseSync(path.join(data, 'db', 'station-manager.db'), {
+            readOnly: true,
+        });
         try {
             db.exec('PRAGMA busy_timeout = 5000');
-            db.prepare(
-                `INSERT INTO operating_session_member (qso_id, session_id)
-                 SELECT (SELECT MAX(id) FROM qso), id FROM operating_session WHERE closed_at IS NULL`
-            ).run();
+            memberRows = db
+                .prepare(
+                    `SELECT COUNT(*) AS n FROM operating_session_member m
+                     JOIN operating_session s ON s.id = m.session_id
+                     WHERE s.id = ? AND s.closed_at IS NULL
+                       AND m.qso_id = (SELECT MAX(id) FROM qso)`
+                )
+                .get(sessionId).n;
         } finally {
             db.close();
         }
         const withContact = await js(first.win, SESSION);
         check(
-            "The session has one contact (the member row is the scenario's; the contact and the count are smd's)",
+            'The contact logged in the app is in the session: smd wrote its member row, and counts it',
             logged === 201 &&
+                memberRows === 1 &&
                 withContact.session?.id === sessionId &&
                 withContact.session?.has_contacts === true &&
                 withContact.session?.contact_count === 1,
-            `logged ${logged}; ${JSON.stringify(withContact.session)}`
+            `logged ${logged}; member rows ${memberRows}; ${JSON.stringify(withContact.session)}`
+        );
+
+        // 2b. The page shows it (W-0029 part 6, A2, A5). The contact was sent by the
+        //     scenario's own request, not through the page's logging form, so the
+        //     page can only know of it from smd: a window that drew a list of its
+        //     own would show nothing. And it is still there after a reload.
+        let panel = '';
+        let panelAfterReload = '';
+        try {
+            panel = await until(
+                () => js(first.win, SESSION_COUNT).then((t) => (ONE_CONTACT(t) ? t : '')),
+                "the contact in the page's Session",
+                10000
+            );
+            const loaded = new Promise((resolve) =>
+                first.win.webContents.once('did-finish-load', resolve)
+            );
+            first.win.webContents.reload();
+            await loaded;
+            await until(() => js(first.win, WORKSPACE), 'the workspace after a reload');
+            panelAfterReload = await until(
+                () => js(first.win, SESSION_COUNT).then((t) => (ONE_CONTACT(t) ? t : '')),
+                "the contact in the page's Session after a reload",
+                10000
+            );
+        } catch (e) {
+            panel = panel || `not shown: ${e.message}`;
+        }
+        check(
+            "The page's Session shows the contact, which only smd could have told it of, and still does after a reload",
+            ONE_CONTACT(panel) && ONE_CONTACT(panelAfterReload),
+            `before the reload: ${JSON.stringify(panel)}; after: ${JSON.stringify(panelAfterReload)}`
         );
 
         // 3. The first window goes with no confirmed exit: smd is told nothing.

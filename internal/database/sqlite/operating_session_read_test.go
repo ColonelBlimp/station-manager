@@ -30,15 +30,6 @@ func (b *sessBed) membersRead() SessionMembers {
 	return got
 }
 
-func (b *sessBed) memberRead(uuid string) SessionMember {
-	b.t.Helper()
-	got, err := b.svc.OperatingSessionMemberWithContext(context.Background(), uuid)
-	if err != nil {
-		b.t.Fatalf("read contact %s of the session: %v", uuid, err)
-	}
-	return got
-}
-
 func (b *sessBed) closedRead(limit int) ClosedSessions {
 	b.t.Helper()
 	return b.closedPage(limit, nil)
@@ -129,6 +120,14 @@ func TestSessionMembers_AreTheOpenSessionsContactsNotDeleted(t *testing.T) {
 	if after := b.records(); !reflect.DeepEqual(after, before) {
 		t.Fatal("reading the contacts changed the session's record")
 	}
+
+	// A member edited elsewhere reads as edited, with a later edit counter: the
+	// list is the contacts as the file holds them now.
+	counter := got.Members[0].Revision
+	execT(t, b.svc, `UPDATE qso SET call = 'K9ZZZ' WHERE id = ?`, got.Members[0].ID)
+	if again := b.membersRead().Members[0]; again.Call != "K9ZZZ" || again.Revision <= counter {
+		t.Fatalf("after an edit the first row is %q at edit counter %d; want K9ZZZ and a counter above %d", again.Call, again.Revision, counter)
+	}
 }
 
 // With no session open the answer names none, and has the generation.
@@ -189,26 +188,6 @@ func TestSessionReads_AreEachOneSnapshot(t *testing.T) {
 				now.SessionID, now.Generation, memberIDs(now.Members), next.Open.ID, next.Generation, []int64{later})
 		}
 	})
-	t.Run("one contact", func(t *testing.T) {
-		b := newSessBed(t, true)
-		st := b.open(lifeA, 0, SessionApplied)
-		member, _ := b.log(b.x, lifeA, 1)
-		uuid := b.uuidOf(member)
-		between(t, func() {
-			execT(t, b.svc, `UPDATE qso SET call = 'K9ZZZ' WHERE id = ?`, member)
-			b.newSession(lifeA, st.Generation, 3, SessionApplied)
-		})
-
-		got := b.memberRead(uuid)
-
-		if got.SessionID != st.Open.ID || got.Generation != st.Generation || got.Member == nil || got.Member.Call == "K9ZZZ" {
-			t.Fatalf("the read is session %q at generation %d with %+v; want %s at %d with the contact as it was when the read began",
-				got.SessionID, got.Generation, got.Member, st.Open.ID, st.Generation)
-		}
-		if now := b.memberRead(uuid); now.Member != nil || now.SessionID == st.Open.ID {
-			t.Fatalf("a read made afterwards is %+v in session %q; want no row: the contact's session has been closed", now.Member, now.SessionID)
-		}
-	})
 	t.Run("the closed sessions", func(t *testing.T) {
 		b := newSessBed(t, true)
 		st := b.open(lifeA, 0, SessionApplied)
@@ -225,44 +204,6 @@ func TestSessionReads_AreEachOneSnapshot(t *testing.T) {
 			t.Fatalf("a list read afterwards is at generation %d with %+v; want %d and the session New closed", now.Generation, now.Sessions, next.Generation)
 		}
 	})
-}
-
-// One contact of the open session, by its uuid, with the session and the
-// generation. A contact that is not a member that is shown answers no row: a
-// deleted member, a contact of an earlier session, one in no session, and a
-// uuid the file does not hold.
-func TestSessionMember_OneContactOfTheOpenSession(t *testing.T) {
-	b := newSessBed(t, true)
-	st := b.open(lifeA, 0, SessionApplied)
-	earlier, _ := b.log(b.x, lifeA, 1)
-	st = b.newSession(lifeA, st.Generation, 5, SessionApplied)
-	member, _ := b.log(b.x, lifeA, 6)
-	gone, _ := b.log(b.x, lifeA, 7)
-	outside, _ := b.log(b.y, lifeA, 8)
-	execT(t, b.svc, `UPDATE qso SET deleted_at = datetime('now') WHERE id = ?`, gone)
-
-	got := b.memberRead(b.uuidOf(member))
-	if got.SessionID != st.Open.ID || got.Generation != st.Generation || got.Member == nil || got.Member.ID != member {
-		t.Fatalf("the member read is session %q, generation %d, contact %+v; want %s, %d and contact %d",
-			got.SessionID, got.Generation, got.Member, st.Open.ID, st.Generation, member)
-	}
-	first := got.Member.Revision
-	execT(t, b.svc, `UPDATE qso SET call = 'K9ZZZ' WHERE id = ?`, member)
-	if again := b.memberRead(b.uuidOf(member)); again.Member == nil || again.Member.Call != "K9ZZZ" || again.Member.Revision <= first {
-		t.Fatalf("after an edit the member read is %+v; want the edit and a later edit counter than %d", again.Member, first)
-	}
-
-	for what, uuid := range map[string]string{
-		"a deleted member":                b.uuidOf(gone),
-		"a contact of an earlier session": b.uuidOf(earlier),
-		"a contact in no session":         b.uuidOf(outside),
-		"a uuid the file does not hold":   "01920000-0000-7000-8000-0000000000ff",
-	} {
-		if got := b.memberRead(uuid); got.Member != nil || got.SessionID != st.Open.ID || got.Generation != st.Generation {
-			t.Fatalf("%s read as %+v in session %q at generation %d; want no row, in %s at %d",
-				what, got.Member, got.SessionID, got.Generation, st.Open.ID, st.Generation)
-		}
-	}
 }
 
 // closedBed leaves, in order of their latest sitting's start:

@@ -210,22 +210,35 @@ export async function runClose({ adopt, useInstalledQuitRule }) {
         adopt(first); // the app's own window and close, to the main process's handlers
         await until(() => js(first.win, WORKSPACE), "the first start's workspace");
         const opened = await js(first.win, SESSION);
+        // The contact is logged in the app and smd puts it in the session: the
+        // scenario writes nothing to the archive (W-0029 part 6, G3). The row read
+        // here is the one the submit wrote.
         const logged = await js(first.win, LOG_ONE);
-        const db = new DatabaseSync(path.join(data, 'db', 'station-manager.db'));
+        const sessionId = opened.session?.id ?? '';
+        let memberRows = -1;
+        const db = new DatabaseSync(path.join(data, 'db', 'station-manager.db'), {
+            readOnly: true,
+        });
         try {
             db.exec('PRAGMA busy_timeout = 5000');
-            db.prepare(
-                `INSERT INTO operating_session_member (qso_id, session_id)
-                 SELECT (SELECT MAX(id) FROM qso), id FROM operating_session WHERE closed_at IS NULL`
-            ).run();
+            memberRows = db
+                .prepare(
+                    `SELECT COUNT(*) AS n FROM operating_session_member m
+                     JOIN operating_session s ON s.id = m.session_id
+                     WHERE s.id = ? AND s.closed_at IS NULL
+                       AND m.qso_id = (SELECT MAX(id) FROM qso)`
+                )
+                .get(sessionId).n;
         } finally {
             db.close();
         }
-        const sessionId = opened.session?.id ?? '';
         check(
-            'The first start holds a session with one contact',
-            opened.state === 'open' && opened.session?.held_by_you === true && logged === 201,
-            `logged ${logged}; ${JSON.stringify(opened)}`
+            'The first start holds a session, and the contact logged in the app is in it (smd wrote the member row)',
+            opened.state === 'open' &&
+                opened.session?.held_by_you === true &&
+                logged === 201 &&
+                memberRows === 1,
+            `logged ${logged}; member rows ${memberRows}; ${JSON.stringify(opened)}`
         );
 
         // No key reloads the page, and there is no menu to reload it from (F3).

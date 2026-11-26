@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -12,9 +11,10 @@ import (
    sink and the submit route as the daemon composes them, the real archive file
    with an enabled insert route, and an app admitted to it.
 
-   The membership is connected here as part 6's change will connect it
-   (api.Server.ConnectSessionMembership). The daemon's ordinary start does not
-   connect it (operator ruling 2026-11-24), and the last test is of that start.
+   The membership is connected by the daemon's ORDINARY START (W-0029 part 6,
+   criteria G): no test here connects it, so each is of the daemon as the
+   station runs it. (Until part 6 the start left it unconnected, by the
+   operator's ruling of 2026-11-24, and these tests connected it themselves.)
    What each reads is what is STORED: the contact's row, and its member row or
    its absence.
 */
@@ -39,33 +39,26 @@ func (b *orderBed) phoneContact(t *testing.T, lifetime, timeOn string) {
 	}
 }
 
-// A1, A2, B5: with the membership connected, a completed FT8 exchange and a
-// live Phone/CW submit each join the session the running app holds. A contact
-// logged before the connection stays in no session: connecting adds no row.
+// A1, A2, G2: through the daemon as its ordinary start composes it, a
+// completed FT8 exchange and a live Phone/CW submit each join the session the
+// running app holds.
 func TestMembership_Daemon_AnFt8CompletionAndAPhoneContactJoinTheOpenSession(t *testing.T) {
 	b, gen := newExitFt8Bed(t)
-	b.earned("K1OLD") // before the membership is connected
-	b.d.drainFt8Completions()
-	if n := b.count(t, `SELECT COUNT(*) FROM qso WHERE call = 'K1OLD'`); n != 1 {
-		t.Fatalf("%d contacts stored before the connection, want 1", n)
-	}
-
-	b.d.server.ConnectSessionMembership()
 	b.earned("JA1XYZ")
 	b.d.drainFt8Completions()
 	b.phoneContact(t, orderLifeA, "1210")
 
-	if n := b.count(t, `SELECT COUNT(*) FROM qso`); n != 3 {
-		t.Fatalf("%d contacts stored, want 3", n)
+	if n := b.count(t, `SELECT COUNT(*) FROM qso`); n != 2 {
+		t.Fatalf("%d contacts stored, want 2", n)
 	}
 	if ft8, phone := b.memberOf(t, "JA1XYZ"), b.count(t, `SELECT COUNT(*) FROM operating_session_member m JOIN qso q ON q.id = m.qso_id
 		JOIN operating_session s ON s.id = m.session_id WHERE q.time_on LIKE '1210%' AND s.closed_at IS NULL`); ft8 != 1 || phone != 1 {
 		t.Fatalf("member rows: %d for the FT8 contact and %d for the Phone/CW one; want one each, in the open session", ft8, phone)
 	}
-	if n := b.count(t, `SELECT COUNT(*) FROM operating_session_member`); n != 2 || b.memberOf(t, "K1OLD") != 0 {
-		t.Fatalf("%d member rows; want two, and none for the contact logged before the connection", n)
+	if n := b.count(t, `SELECT COUNT(*) FROM operating_session_member`); n != 2 {
+		t.Fatalf("%d member rows; want two", n)
 	}
-	if b.count(t, `SELECT COUNT(*) FROM qso_upload`) != 3 {
+	if b.count(t, `SELECT COUNT(*) FROM qso_upload`) != 2 {
 		t.Fatalf("%d upload rows, want one for each contact", b.count(t, `SELECT COUNT(*) FROM qso_upload`))
 	}
 	// The contacts joined the app's own session: no session was opened or
@@ -76,25 +69,46 @@ func TestMembership_Daemon_AnFt8CompletionAndAPhoneContactJoinTheOpenSession(t *
 	}
 }
 
-// Ruling 1 (2026-11-24): the daemon as its ordinary start composes it. A
-// completed FT8 exchange and a live Phone/CW submit are stored, no member row
-// is written, and the next app to start is asked nothing.
-func TestMembership_Daemon_TheOrdinaryStartConnectsNothing(t *testing.T) {
+// G2: the daemon as its ordinary start composes it, after a kill. The app is
+// gone without a confirmed exit and its session has a contact: the next app to
+// start is asked about it (the brief's upgrade scenario, the killed half).
+func TestMembership_Daemon_TheNextStartAfterAKillAsks(t *testing.T) {
 	b, _ := newExitFt8Bed(t)
-	b.earned("JA1XYZ")
-	b.d.drainFt8Completions()
 	b.phoneContact(t, orderLifeA, "1210")
-	if n := b.count(t, `SELECT COUNT(*) FROM qso`); n != 2 {
-		t.Fatalf("%d contacts stored, want 2", n)
+	leftover := b.text(t, `SELECT id FROM operating_session WHERE closed_at IS NULL`)
+
+	b.mustAdmit(t, orderLifeB) // no exit was confirmed for the first app
+	if _, state := b.session(t, orderLifeB); state != "recovery_pending" {
+		t.Fatalf("the next app reads %q; want the question: the session it found has a contact", state)
 	}
-	if n := b.count(t, `SELECT COUNT(*) FROM operating_session_member`); n != 0 {
-		t.Fatalf("the daemon's ordinary start wrote %d member rows; membership is not connected until part 6", n)
+	if open := b.text(t, `SELECT id FROM operating_session WHERE closed_at IS NULL`); open != leftover || b.count(t, `SELECT COUNT(*) FROM operating_session`) != 1 {
+		t.Fatalf("the open session is %s of %d; want the earlier app's, %s, kept and the only one",
+			open, b.count(t, `SELECT COUNT(*) FROM operating_session`), leftover)
 	}
-	// Another app starts while the first still holds the session, as after a
-	// kill: with no member row the leftover session is empty, and nothing is asked.
+}
+
+// G2: the same, closed normally. The first app's exit is confirmed, which
+// closes its session and keeps it for its contact: the next app to start is
+// asked nothing and has a session of its own.
+func TestMembership_Daemon_AStartAfterAConfirmedExitAsksNothing(t *testing.T) {
+	b, _ := newExitFt8Bed(t)
+	b.phoneContact(t, orderLifeA, "1210")
+	earlier := b.text(t, `SELECT id FROM operating_session WHERE closed_at IS NULL`)
+	gen, _ := b.session(t, orderLifeA)
+	if code, body := b.exit(t, orderLifeA, gen); code != http.StatusOK {
+		t.Fatalf("the exit = %d %s; want 200", code, body)
+	}
+
 	b.mustAdmit(t, orderLifeB)
 	if _, state := b.session(t, orderLifeB); state != "open" {
 		t.Fatalf("the next app reads %q; want a session of its own and no question", state)
+	}
+	if open := b.text(t, `SELECT id FROM operating_session WHERE closed_at IS NULL`); open == earlier {
+		t.Fatal("the next app holds the earlier app's session; want one of its own")
+	}
+	if kept := b.count(t, `SELECT COUNT(*) FROM operating_session_member m JOIN operating_session s ON s.id = m.session_id
+		WHERE s.id = ? AND s.closed_at IS NOT NULL`, earlier); kept != 1 {
+		t.Fatalf("the earlier session holds %d contacts as a closed session; want it kept, with its one contact", kept)
 	}
 }
 
@@ -128,7 +142,6 @@ func (b *orderBed) sessionOf(t *testing.T, where string, args ...any) (session, 
 // earlier session, which holds the contact; no session was opened or discarded.
 func TestMembership_Daemon_AnAppStartWaitsForAnEarnedContact(t *testing.T) {
 	b, _ := newExitFt8Bed(t)
-	b.d.server.ConnectSessionMembership()
 	leftover := b.text(t, `SELECT id FROM operating_session WHERE closed_at IS NULL`)
 	release := b.holdArchiveWrites(t)
 	b.earned("JA1XYZ") // its job waits at the write lock
@@ -155,33 +168,10 @@ func TestMembership_Daemon_AnAppStartWaitsForAnEarnedContact(t *testing.T) {
 	}
 }
 
-// Ruling 1 (2026-11-24): the daemon's ordinary start does not connect the
-// wait. An admission answers while a completion job is still running, as it
-// always has.
-func TestMembership_Daemon_TheOrdinaryStartDoesNotWaitAtAnAppStart(t *testing.T) {
-	b, _ := newExitFt8Bed(t)
-	gate := make(chan struct{})
-	released := false
-	letGo := func() {
-		if !released {
-			released = true
-			close(gate)
-		}
-	}
-	t.Cleanup(letGo)
-	launchFt8QsoLog(&b.d.qsoLogWG, nil, func(context.Context) { <-gate })
-
-	r := within(t, "an admission with a completion job still running", async(func() (int, []byte) { return b.admit(t, orderLifeB) }))
-	if r.code != http.StatusOK {
-		t.Fatalf("the admission = %d %s; want 200", r.code, r.body)
-	}
-}
-
 // H: an FT8 contact earned before a switch and stored by its drain is a member
 // of the session the switch closes, which is kept.
 func TestMembership_Daemon_ASwitchKeepsTheSessionOfAContactItsDrainStored(t *testing.T) {
 	b, other := newSwitchFt8Bed(t)
-	b.d.server.ConnectSessionMembership()
 	session := b.text(t, `SELECT id FROM operating_session WHERE closed_at IS NULL`)
 	release := b.holdArchiveWrites(t)
 	b.earned("JA1XYZ")
@@ -203,7 +193,6 @@ func TestMembership_Daemon_ASwitchKeepsTheSessionOfAContactItsDrainStored(t *tes
 // switch waits for it is a member of the session the switch closes.
 func TestMembership_Daemon_ASwitchKeepsTheSessionOfAnAdmittedPhoneContact(t *testing.T) {
 	b := newOrderBed(t)
-	b.d.server.ConnectSessionMembership()
 	other := b.provision(t)
 	b.started(t)
 	session := b.text(t, `SELECT id FROM operating_session WHERE closed_at IS NULL`)
@@ -232,7 +221,6 @@ func TestMembership_Daemon_ASwitchKeepsTheSessionOfAnAdmittedPhoneContact(t *tes
 // of the session the exit closes.
 func TestMembership_Daemon_AnExitClosesTheSessionOfAContactItsDrainStored(t *testing.T) {
 	b, gen := newExitFt8Bed(t)
-	b.d.server.ConnectSessionMembership()
 	session := b.text(t, `SELECT id FROM operating_session WHERE closed_at IS NULL`)
 	release := b.holdArchiveWrites(t)
 	b.earned("JA1XYZ")

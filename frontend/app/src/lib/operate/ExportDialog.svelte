@@ -10,7 +10,7 @@
     // metadata) — a real option lands when the format does, not a greyed tease.
     import { fade } from 'svelte/transition';
     import { operate, closeExport } from './state.svelte';
-    import { session, markSessionEmailed } from './session.svelte';
+    import { session, refreshSessionRows, sessionEmailSent } from './session.svelte';
     import { sessionActionBlock } from './archiveStores.svelte';
     import { mailer } from './mailer.svelte';
     import { sendSessionEmail } from '../api/session-email';
@@ -57,6 +57,20 @@
     $effect(() => {
         if (operate.exportOpen) onlyUnsent = true;
     });
+    // After a send, the "already emailed" marks on screen are older than the send
+    // until a read taken after it has answered (session.emailPending). Until
+    // then Send is held: a send from these rows would mail the same contacts
+    // again. Opening the dialog asks for that read again, so a read that failed
+    // is retried by the operator coming back here, and by nothing else they
+    // would have to know about.
+    $effect(() => {
+        if (operate.exportOpen && session.emailPending) refreshSessionRows();
+    });
+    const emailHold = $derived(
+        session.emailPending
+            ? "The last send is being checked against the daemon's records. Send is available once the Session has been read again."
+            : null
+    );
     const sendRows = $derived(onlyUnsent ? unsentRows : session.qsos);
     // What the send is accounted against (distinct UUIDs + rows without one), so
     // the label matches the denominator of its report.
@@ -67,7 +81,8 @@
             recipient.trim() !== '' &&
             recipient.includes('@') &&
             !sending &&
-            blocked === null
+            blocked === null &&
+            emailHold === null
     );
 
     // The daemon rebuilds the ADIF from the DB (enriched record + a backup in
@@ -128,11 +143,13 @@
             toasts.dismiss(pending);
             switch (outcome.kind) {
                 case 'sent': {
-                    // Flag only the rows the daemon durably stamped, and only once
-                    // its lists account exactly for what was sent, so a resend
-                    // defaults to the remaining not-yet-emailed delta.
+                    // The "already emailed" mark is the contact's own record
+                    // (W-0029 part 6, ruling 6): the daemon stamped it, and the
+                    // rows are read again to show exactly the contacts it stamped.
+                    // The window marks nothing itself, so a partial send cannot
+                    // be shown as a whole one.
                     const report = emailReport(sel, to, outcome.lists);
-                    markSessionEmailed(report.mark);
+                    sessionEmailSent();
                     show(report);
                     closeExport();
                     break;
@@ -159,6 +176,11 @@
                     // re-send risks a duplicate email in a real inbox. A FIRED
                     // timeout gets the shared "outcome unknown" lead; a generic
                     // network failure keeps the existing cautious wording (F-04b).
+                    //
+                    // The stamps may have been made too, so the rows are held
+                    // as after a send: no resend from them until the daemon's
+                    // records have been read.
+                    sessionEmailSent();
                     if (outcome.timedOut === true) {
                         toasts.warn(
                             `${OUTCOME_UNKNOWN_LEAD} The email may already have been sent; check before retrying.`
@@ -275,6 +297,9 @@
                                       : 'Send'}
                             </button>
                         </div>
+                        {#if emailHold !== null}
+                            <p class="mt-2 text-xs text-warning" role="status">{emailHold}</p>
+                        {/if}
                         {#if emailedCount > 0}
                             <label class="mt-2 flex items-center gap-2 text-xs text-muted">
                                 <input

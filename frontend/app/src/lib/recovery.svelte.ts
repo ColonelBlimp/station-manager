@@ -51,7 +51,13 @@ export interface SessionStateLike {
     archiveId: string;
     generation: number;
     state: SessionStateNameLike;
-    session: { id: string; openedAt: string; contactCount: number; heldByYou: boolean } | null;
+    session: {
+        id: string;
+        openedAt: string;
+        sittingStartedAt: string | null;
+        contactCount: number;
+        heldByYou: boolean;
+    } | null;
 }
 
 export type SessionReadLike =
@@ -73,6 +79,10 @@ export interface RecoveryPorts {
     ) => Promise<SessionAnswerLike>;
     /** The archive the page is bound to; null while none is proven. */
     archive: () => string | null;
+    /** Told each state this gate draws, and no state it refuses (W-0029 part
+     *  6): the Session the workspace shows follows the same one rule, so the
+     *  panel can never be of a state the gate did not draw. */
+    drawn?: (state: SessionStateLike) => void;
 }
 
 export type RecoveryStatus = 'loading' | 'question' | 'unreadable' | 'clear';
@@ -130,6 +140,7 @@ function draw(state: SessionStateLike): boolean {
     drawn = { archiveId: state.archiveId, generation: state.generation };
     draws++;
     recovery.generation = state.generation;
+    ports?.drawn?.(state);
     if (state.state === 'recovery_pending' && state.session !== null) {
         recovery.status = 'question';
         recovery.session = {

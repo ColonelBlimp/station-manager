@@ -12,7 +12,13 @@ import { setContestDupeCheck } from './lib/operate/contestDupe.svelte';
 import { setContestHistoryLoader } from './lib/operate/contestHistory.svelte';
 import { fetchContestCompletions } from './lib/api/contest-history';
 import { allocateContestSerial } from './lib/api/contest-serial';
-import { fileSessionQso } from './lib/operate/session.svelte';
+import {
+    refreshSessionRows,
+    sessionContactStored,
+    sessionStateDrawn,
+    sessionStreamReopened,
+    setSessionPorts,
+} from './lib/operate/session.svelte';
 import { fileFt8Logged } from './lib/operate/ft8Logged';
 import { setMailer } from './lib/operate/mailer.svelte';
 import {
@@ -88,7 +94,11 @@ import {
 import { toasts } from './lib/ui/toasts.svelte';
 import { setup, setSetupSave } from './lib/setup.svelte';
 import { readSessionState, sessionArchiveProven, setRecoveryPorts } from './lib/recovery.svelte';
-import { answerOperatingSession, fetchOperatingSession } from './lib/api/operating-session';
+import {
+    answerOperatingSession,
+    fetchOperatingSession,
+    fetchSessionMembers,
+} from './lib/api/operating-session';
 import { boundArchive } from './lib/api/archive-guard';
 import { setStationSaved } from './lib/config/station.svelte';
 import { setFt8PrefsSaved } from './lib/config/ft8.svelte';
@@ -593,10 +603,6 @@ setSubmit(async (q, opts) => {
         return refuse('Rig frequency is not set — enter it in the Rig panel.');
     }
 
-    // Only trust the enrichment if it is actually for this call (a fast log
-    // can outrun the debounced lookup).
-    const e = enrich.call === call ? enrich.data : null;
-
     // The rig state holds the operator-friendly literal (USB, PSK31); ADIF
     // wants the canonical (MODE, SUBMODE) pair — the daemon 400s on MODE=USB.
     const { mode, subMode } = resolveModeAndSubmode(rig.mode);
@@ -645,19 +651,10 @@ setSubmit(async (q, opts) => {
         { force: opts?.force }
     );
     if (out.kind === 'stored') {
-        // Filed under the archive whose daemon stored it (ADR 0094 update).
-        fileSessionQso(out.archiveId, {
-            uuid: out.uuid,
-            callsign: call,
-            timeOn: q.timeOn,
-            band: rig.band,
-            mode: rig.mode,
-            rstSent: q.rstSent,
-            rstRcvd: q.rstRcvd,
-            name: q.name,
-            country: e?.country ?? '',
-            comment: q.comment,
-        });
+        // The Session shows what the daemon says is in it (W-0029 part 6, A2):
+        // this window adds no row for a contact it logged. It asks for the rows
+        // to be read, as the contact's own event does.
+        refreshSessionRows();
         refreshLogbookCount(); // header "(n)" ticks up on each logged Phone/CW QSO
         return { ok: true };
     }
@@ -728,15 +725,33 @@ function enrichmentExtras(call: string, myGrid: string) {
 // own read is made when the boot's bracket has proven the archive
 // (sessionArchiveProven, above): nothing is drawn before that proof, nothing
 // read before it is used, and a state older than the one shown is never drawn.
+//
+// The Session panel's rows ride it as well (W-0029 part 6, B). Every state the
+// gate draws is handed to the Session (drawn), which reads that session's rows.
+// A contact event carries no row: it only asks for the rows to be read again,
+// and what is drawn is the answer, which names its archive. At every opening the
+// rows are read again and a read sent before is given up.
 setRecoveryPorts({
     read: fetchOperatingSession,
     answer: answerOperatingSession,
     archive: boundArchive,
+    drawn: sessionStateDrawn,
+});
+setSessionPorts({
+    readRows: fetchSessionMembers,
+    readState: readSessionState,
+    archive: boundArchive,
 });
 openLogEvents({
-    onOpen: () => void readSessionState(),
+    onOpen: () => {
+        void readSessionState();
+        sessionStreamReopened();
+    },
     onTransportError: () => {},
-    onQsoChanged: () => {},
+    onQsoChanged: (event, p) => {
+        if (event === 'qso.stored') sessionContactStored(p.operating_session_id);
+        else refreshSessionRows();
+    },
     onSessionChanged: () => void readSessionState(),
     onReconnect: () => {
         refreshLogbookCount();

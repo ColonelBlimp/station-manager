@@ -32,6 +32,10 @@ export interface QsoEventPayload {
     /** DEPRECATED daemon-local numeric id — removed in v2.0.0-alpha.3. Prefer qso_uuid. */
     qso_id?: number;
     logbook_id: number;
+    /** qso.stored only: the operating session the contact joined, from the
+     *  contact's own transaction (ADR 0100 §2). Absent for a contact that
+     *  joined none. */
+    operating_session_id?: string;
 }
 
 export interface LogEventHandlers {

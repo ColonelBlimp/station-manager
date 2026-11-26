@@ -15,8 +15,9 @@ import (
 )
 
 // What the Session panel reads (ADR 0100 §7, §8; W-0029 part 6): the open
-// session's contacts, one contact of it, and the closed sessions Continue
-// offers. Each answer is ONE snapshot of the file, and carries the session
+// session's contacts and the closed sessions Continue offers. (A read of one
+// contact was built with these and removed in the cutover: the page reads the
+// whole ordered list for every change, and a route nothing calls is not kept.) Each answer is ONE snapshot of the file, and carries the session
 // generation it was read at: a window draws an answer only for the session and
 // generation it is showing, so the three must never be of different moments.
 //
@@ -36,17 +37,6 @@ type SessionMembers struct {
 	SessionID string
 	// Members are its contacts that are not deleted, the newest stored first.
 	Members []types.Qso
-}
-
-// SessionMember is one contact of the open session.
-type SessionMember struct {
-	Generation int64
-	// SessionID is the open session, "" when none is open.
-	SessionID string
-	// Member is the contact, nil when it is not a member of the open session
-	// that is shown: it is deleted, it is in another session or in none, or the
-	// file does not hold it.
-	Member *types.Qso
 }
 
 // ClosedSession is one line of Continue's list.
@@ -165,41 +155,6 @@ func (s *Service) OperatingSessionMembersWithContext(ctx context.Context) (Sessi
 	})
 	if err != nil {
 		return SessionMembers{}, err
-	}
-	return out, nil
-}
-
-// OperatingSessionMemberWithContext reads one contact of the open session by
-// its uuid, with the session's id and the generation, in one snapshot. Member
-// is nil for a contact that is not a member that is shown.
-func (s *Service) OperatingSessionMemberWithContext(ctx context.Context, uuid string) (SessionMember, error) {
-	const op errors.Op = "sqlite.Service.OperatingSessionMemberWithContext"
-	if uuid == "" {
-		return SessionMember{}, errors.New(op).WithMsg("uuid is required")
-	}
-	var out SessionMember
-	err := s.readSnapshot(ctx, op, "read a contact of the operating session", func(ctx context.Context, tx *sql.Tx) error {
-		var err error
-		if out.Generation, out.SessionID, err = openSessionOf(ctx, tx); err != nil || out.SessionID == "" {
-			return err
-		}
-		betweenSessionReads()
-		row, err := models.Qsos(memberOf(out.SessionID), qm.Where(models.QsoColumns.UUID+" = ?", uuid)).One(ctx, tx)
-		if stderr.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		q, err := adapters.QsoModelToType(row)
-		if err != nil {
-			return err
-		}
-		out.Member = &q
-		return nil
-	})
-	if err != nil {
-		return SessionMember{}, err
 	}
 	return out, nil
 }

@@ -23,11 +23,12 @@ import { submitQso } from '../api/qso';
 import { startFt8Cq } from '../api/ft8qso';
 import {
     bindArchiveStores,
+    fileUnderArchive,
     sessionActionBlock,
     storesArchive,
     _reloadArchiveStoresForTests,
 } from '../operate/archiveStores.svelte';
-import { fileSessionQso, session } from '../operate/session.svelte';
+import { session } from '../operate/session.svelte';
 import { TEST_ARCHIVE } from '../../test/archive';
 import {
     activateArchive,
@@ -1201,7 +1202,9 @@ describe('the per-archive stores follow the proven binding', () => {
         bindArchiveStores(TEST_ARCHIVE);
     });
 
-    it('an agreeing boot binds the stores: the archive list loads, the legacy key goes', async () => {
+    // The list an earlier build kept for this archive is removed and never shown
+    // (W-0029 part 6, B8): the Session's rows are read from the daemon.
+    it('an agreeing boot binds the stores: an earlier build’s list and the legacy key go', async () => {
         vi.mocked(fetchDaemonIdentity).mockResolvedValue({
             instance: 'i1',
             archiveId: A,
@@ -1209,7 +1212,8 @@ describe('the per-archive stores follow the proven binding', () => {
         });
         await bootArchiveScoped(() => Promise.resolve());
         expect(storesArchive()).toBe(A);
-        expect(session.qsos.map((q) => q.callsign)).toEqual(['ZS4JAN']);
+        expect(session.qsos).toEqual([]);
+        expect(sessionStorage.getItem(`sm.session.qsos.${A}`)).toBeNull();
         expect(legacy()).toBeNull();
     });
 
@@ -1267,22 +1271,12 @@ describe('the per-archive stores follow the proven binding', () => {
             archiveId: B,
             defaultLogbookUuid: CONTEST_DEFAULT,
         });
-        fileSessionQso(B, {
-            uuid: 'c-1',
-            callsign: 'VK0YY',
-            timeOn: '',
-            band: '',
-            mode: '',
-            rstSent: '',
-            rstRcvd: '',
-            name: '',
-            country: '',
-            comment: '',
-        });
+        let written = false;
+        fileUnderArchive(B, 'a write of archive B', () => (written = true));
         expect(fetchDaemonIdentity).toHaveBeenCalled(); // synchronously started
         for (let i = 0; i < 10; i++) await Promise.resolve();
         expect(reloads).toBe(1);
-        expect(session.qsos.map((q) => q.callsign)).toEqual(['ZS4JAN']);
+        expect(written).toBe(false);
     });
 });
 

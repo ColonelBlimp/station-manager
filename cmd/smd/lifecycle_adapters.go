@@ -1235,6 +1235,11 @@ func (d *daemon) initHTTP() error {
 	// A confirmed exit of the app waits for FT8 completion logging already
 	// earned before it closes the session (ADR 0100 §3).
 	d.server.SetCompletionDrain(d.drainFt8Completions)
+	// Live logging joins the operating session, and an app's start waits for
+	// logging already earned before it judges a leftover session (ADR 0100 §2,
+	// §3; W-0029 part 6, G1). This is the one place it is connected: from here
+	// the Session the operator sees is the daemon's, and the page reads it.
+	d.server.ConnectSessionMembership()
 	d.archives.SetLiveEntrySeal(d.liveEntry)
 	// An archive switch ends the sitting in the archive it leaves (ADR 0100
 	// §4; W-0029 part 3): its own seal on live entry, the same wait for FT8

@@ -107,19 +107,16 @@ function partitionHolds(sel: Selection, l: EmailLists): boolean {
     return l.emailed.every((u) => sent.has(u));
 }
 
-/** The toast for a sent email, and the UUIDs that may be marked emailed. */
-export function emailReport(
-    sel: Selection,
-    to: string,
-    lists: EmailLists | null
-): Report & { mark: string[] } {
+/** The toast for a sent email. Which contacts are shown as emailed is not
+ *  decided here or by the window: it is each contact's own record, read from
+ *  the daemon after the send (W-0029 part 6, ruling 6). */
+export function emailReport(sel: Selection, to: string, lists: EmailLists | null): Report {
     if (lists === null || !partitionHolds(sel, lists)) {
         return {
             level: 'warn',
             text:
                 `Email sent to ${to}, but the daemon did not confirm which QSOs it contained. ` +
-                `No Session rows were marked as emailed.${localNotes(sel, true)}`,
-            mark: [],
+                `The Session shows the contacts it recorded as emailed.${localNotes(sel, true)}`,
         };
     }
     const sent = lists.sent.length;
@@ -141,5 +138,5 @@ export function emailReport(
     const complete = !short && stamped === sent;
     if (!complete) text += '.';
     if (sel.collapsed > 0) text += `${complete ? '.' : ''} ${DUPLICATES}`;
-    return { level: complete ? 'info' : 'warn', text, mark: lists.emailed };
+    return { level: complete ? 'info' : 'warn', text };
 }

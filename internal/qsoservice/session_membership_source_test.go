@@ -100,7 +100,7 @@ func TestSource_TheMembershipIsNamedOnlyWhereItIsAllowed(t *testing.T) {
 		{"the logging step", `\bJoinOperatingSessionTx\b`, []string{record, step}},
 		{"a live submit", `\bSubmitLive\b`, []string{sink, route, step, submit}},
 		{"setting the membership", `\bSetSessionMembership\b`, []string{connect, step, submit}},
-		{"connecting the membership", `\bConnectSessionMembership\b`, []string{connect}},
+		{"connecting the membership", `\bConnectSessionMembership\b`, []string{sink, connect}},
 	} {
 		want := append([]string(nil), c.want...)
 		sort.Strings(want)
@@ -124,11 +124,16 @@ func TestSource_TheMembershipIsNamedOnlyWhereItIsAllowed(t *testing.T) {
 		}
 	}
 
-	// Connecting is declared once and called by nothing in production.
+	// Connecting is declared once and called once in production: by the
+	// daemon's ordinary start, on the server it has just built (W-0029 part 6,
+	// G1). Until part 6 nothing in production called it.
 	calls := regexp.MustCompile(`[.\s(]ConnectSessionMembership\(\)`)
 	decl := regexp.MustCompile(`func \(s \*Server\) ConnectSessionMembership\(\)`)
 	if got := len(calls.FindAllString(files[connect], -1)) - len(decl.FindAllString(files[connect], -1)); got != 0 {
-		t.Errorf("%s calls ConnectSessionMembership %d time(s); until part 6 nothing in production does", connect, got)
+		t.Errorf("%s calls ConnectSessionMembership %d time(s); want only its declaration there", connect, got)
+	}
+	if got := calls.FindAllString(files[sink], -1); len(got) != 1 || !strings.Contains(files[sink], "d.server.ConnectSessionMembership()") {
+		t.Errorf("%s calls ConnectSessionMembership as %q; want once, on the daemon's server", sink, got)
 	}
 }
 
