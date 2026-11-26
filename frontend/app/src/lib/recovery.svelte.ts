@@ -25,14 +25,19 @@
         for. A state changes without its generation changing (a contact joins
         and the count rises; the same session reads "open" or "recovery
         pending" by which app is admitted when the daemon is asked), so of two
-        requests that overlap, the one sent later is taken as the newer when
-        its answer is the first to arrive, and the earlier one's answer is
-        then not drawn (codex-276). But the order two requests were SENT in is
-        not the order the daemon served them in: the earlier one may have been
-        served last, and be the newer in fact. The page cannot tell. So when
-        it sets such an answer aside it makes sure a read sent after BOTH is on
-        its way, and that read's answer, which is newer than either, is what
-        the page ends on (the review of ff5e855c). A read sent before an
+        requests that overlap, the one sent later is taken as the newer: its
+        answer is drawn over the earlier one's, and the earlier one's is not
+        drawn over its (codex-276). But the order two requests were SENT in is
+        not the order the daemon served them in: either may have been served
+        last, and be the newer in fact (the review of ff5e855c). The page
+        cannot tell, and a read that was already out when the second answer
+        arrived cannot tell it either: that one too may have been served before
+        (the review of 5f48eaa0). So whenever an answer arrives whose request
+        was out while the state shown, of the same generation, was drawn, the
+        page reads once more, and sends that read only when no read is out.
+        Every answer has arrived by then, so the daemon serves it after all of
+        them, and its answer is what the page ends on. Reads that did not
+        overlap are in order and nothing more is read. A read sent before an
         answer cannot put the old question back;
       - a state is drawn only for the archive the boot has PROVEN. One read
         before that proof, or for another archive, is not drawn and is not
@@ -120,16 +125,19 @@ export const recovery: {
 } = $state({ status: 'loading', session: null, generation: 0, answering: false, error: '' });
 
 let ports: RecoveryPorts | null = null;
-// The state last drawn: its archive and generation.
-let drawn: { archiveId: string; generation: number; asked: number } | null = null;
+// The state last drawn: its archive and generation, the number its request
+// took (`asked`), and which draw it was (`drawNo`).
+let drawn: { archiveId: string; generation: number; asked: number; drawNo: number } | null = null;
 // Counts the requests sent, reads and answers alike: each takes the next number
 // as it is sent, and that number orders two answers at one generation.
 let asked = 0;
-// The numbers of the READS that are out. When an answer is set aside for its
-// number, the page looks here for a read sent after the state it shows; with
-// none on its way it sends one.
-// (A plain list: nothing reads it reactively, and it holds a handful at most.)
-let readsOut: number[] = [];
+// How many reads are out.
+let readsOut = 0;
+// Two answers of one generation overlapped, and which of them the daemon served
+// last is not known. One read settles it, sent when no read is out: every
+// answer has arrived by then. It is one flag and one read however many
+// overlapped, so the reads the page sends for itself never chase one another.
+let unsure = false;
 // Counts the states drawn. A read notes it when it is sent: if it has moved by
 // the time that read fails, something authoritative has been drawn since, by a
 // later read or by an answer, and the failure is obsolete.
@@ -158,8 +166,13 @@ function draw(state: SessionStateLike, sentAs: number): boolean {
         // The same generation: the one asked for later is the newer.
         if (state.generation === drawn.generation && sentAs < drawn.asked) return false;
     }
-    drawn = { archiveId: state.archiveId, generation: state.generation, asked: sentAs };
     draws++;
+    drawn = {
+        archiveId: state.archiveId,
+        generation: state.generation,
+        asked: sentAs,
+        drawNo: draws,
+    };
     recovery.generation = state.generation;
     ports?.drawn?.(state);
     if (state.state === 'recovery_pending' && state.session !== null) {
@@ -176,15 +189,30 @@ function draw(state: SessionStateLike, sentAs: number): boolean {
     return true;
 }
 
-// An answer was not drawn. If that was because it was sent before the state
-// shown at the SAME generation, which of the two the daemon served last is not
-// known: make sure a read sent after the one shown is on its way. One that is
-// already out will do; with none, one is sent. Its answer is newer than both.
-function reconcile(state: SessionStateLike, sentAs: number): void {
-    if (drawn === null || drawn.archiveId !== state.archiveId) return;
-    if (state.generation !== drawn.generation || sentAs >= drawn.asked) return;
-    const shownAs = drawn.asked;
-    if (readsOut.some((n) => n > shownAs)) return;
+// take draws an answer by the one rule, and notes when its order against the
+// state shown is not known: that state is of the same generation and was drawn
+// while this answer's request was out (`drawsWhenSent` is the count of draws
+// when it was sent). Whichever of the two the rule keeps, the daemon may have
+// served the other last. An answer of another generation is ordered by it.
+function take(state: SessionStateLike, sentAs: number, drawsWhenSent: number): boolean {
+    if (
+        drawn !== null &&
+        drawn.archiveId === state.archiveId &&
+        drawn.generation === state.generation &&
+        drawn.drawNo > drawsWhenSent
+    ) {
+        unsure = true;
+    }
+    return draw(state, sentAs);
+}
+
+// With an order not known and no read out, read once. That read is sent after
+// every answer arrived. If another request overlaps it in its turn, the same
+// rule sends one more after that; it ends when nothing else is asking. A read
+// that fails is not repeated: nothing here asks an unreachable daemon in a loop.
+function settle(): void {
+    if (!unsure || readsOut > 0) return;
+    unsure = false;
     void read(false);
 }
 
@@ -193,21 +221,25 @@ function reconcile(state: SessionStateLike, sentAs: number): void {
 // than the state shown).
 async function read(uncertain: boolean): Promise<boolean> {
     if (ports === null) return false;
+    readsOut++;
+    try {
+        return await readOnce(ports, uncertain);
+    } finally {
+        readsOut--;
+        settle();
+    }
+}
+
+async function readOnce(p: RecoveryPorts, uncertain: boolean): Promise<boolean> {
     const drawsWhenSent = draws;
     // What a read may draw is decided by when it was SENT, not by what is bound
     // when it returns (codex-228). One sent with no archive proven draws
     // nothing, even if it comes back after the proof and for that very
     // archive: it may be older than the read the proof itself sends, and
     // drawing it would also make that read's failure look obsolete.
-    const sentFor = ports.archive();
+    const sentFor = p.archive();
     const sentAs = ++asked;
-    readsOut.push(sentAs);
-    let out: SessionReadLike;
-    try {
-        out = await ports.read();
-    } finally {
-        readsOut = readsOut.filter((n) => n !== sentAs);
-    }
+    const out = await p.read();
     if (out.kind === 'ok') {
         if (sentFor === null) return false;
         if (out.state.archiveId !== sentFor) {
@@ -215,12 +247,11 @@ async function read(uncertain: boolean): Promise<boolean> {
             // that the daemon serves another archive now. It is not drawn, and
             // it starts the page's archive check (codex-275): when the event
             // stream opens on that daemon for the first time, nothing else does.
-            ports.otherArchive?.(out.state.archiveId);
+            p.otherArchive?.(out.state.archiveId);
             return false;
         }
-        const drawnNow = draw(out.state, sentAs);
+        const drawnNow = take(out.state, sentAs, drawsWhenSent);
         if (drawnNow && !uncertain) recovery.error = '';
-        if (!drawnNow) reconcile(out.state, sentAs);
         return drawnNow;
     }
     if (draws !== drawsWhenSent) return false; // obsolete: a state has been drawn since this was sent
@@ -261,10 +292,12 @@ export async function answerRecovery(answer: RecoveryAnswer): Promise<void> {
     recovery.answering = true;
     recovery.error = '';
     const sentAs = ++asked;
+    const drawsWhenSent = draws;
     const out = await ports.answer(answer, recovery.generation, session.id);
     if (out.kind === 'applied' || out.kind === 'stale') {
         recovery.answering = false;
-        draw(out.state, sentAs);
+        take(out.state, sentAs, drawsWhenSent);
+        settle();
         return;
     }
     // The answer may or may not have been applied: say what went wrong, then
@@ -290,6 +323,7 @@ export function _resetRecoveryForTests(): void {
     ports = null;
     drawn = null;
     asked = 0;
-    readsOut = [];
+    readsOut = 0;
+    unsure = false;
     draws = 0;
 }

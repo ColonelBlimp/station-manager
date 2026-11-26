@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), and one more after that commit's own review (the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), a third after that commit's own review (`5f48eaa0`), and one more after the review of that (the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -5958,3 +5958,48 @@ the question is never replaced by the workspace on the way, even for a moment. T
 to fail first. Three reversions in a temporary copy, each failing a named assertion. Two
 of my tests first failed their reversion only through an unhandled error, without stating
 the rule; they now count the reads sent.
+
+### Part 6, slice 2: a read already on its way settles nothing (after the review of `5f48eaa0`; 2026-11-26; uncommitted when written)
+
+`5f48eaa0` is the correction above, committed and pushed on the operator's word. Its
+clean-room review found one defect in it, and it stands.
+
+**A read that is already out when an answer is set aside does not settle the doubt.** The
+correction sent no new read when a later-sent read was still on its way: "one that is
+already out will do". But that read was only SENT after the state shown. The daemon may
+have served it before the answer set aside: three reads, the first stalled, the second
+drawn with three contacts, the third served with three and slow to return, a contact
+deleted, the first then served with two. The first is set aside, nothing is sent because
+the third is out, the third is drawn, and the page stays on three while the daemon holds
+two. The shortcut leant on the very assumption the correction was made to remove.
+
+**The same doubt exists with nothing set aside.** Reading the finding against the rule
+showed its mirror: the read sent later is DRAWN over the earlier one, by its number, though
+the daemon served it first. No answer is set aside, so `5f48eaa0` asked nothing. The review
+did not raise this order; it is the same defect and is corrected with it.
+
+**Corrected: one rule.** Whenever an answer arrives whose request was out while the state
+shown, of the same generation, was drawn, the order of the two is not known, whichever the
+page keeps. The page then reads once more, and sends that read only when no read is out.
+Every answer has arrived by then, so the daemon serves that read after all of them, and its
+answer is what the page ends on. It is one flag and one read however many overlapped, so
+the reads the page sends for itself do not chase one another; if another request overlaps
+that read in its turn, one more follows the pair, and it ends when nothing else is asking.
+A read that fails is not repeated. The refusal of a stale answer follows the same rule as a
+read. An answer of another generation is ordered by its generation and asks nothing, and
+reads that did not overlap are in order and ask nothing. The list of reads out that
+`5f48eaa0` added is gone; a count replaces it.
+
+**What it costs.** Two reads of the state that are out together are now followed by a
+third. That happens in ordinary running, when two events arrive close together. It is one
+more read of the state from the daemon on the same machine, and the page shows nothing
+while it is out.
+
+**Shown** at the gate: the review's order ends on the daemon's count, with nothing sent
+while a read is out and exactly one read after; the mirror order ends on the daemon's
+count; reads that did not overlap ask nothing; a read that overlaps the extra read brings
+one more and then none; a stale refusal set aside is followed by a read and the answer is
+never sent again. Three of these were seen to fail first. Through the real page: the
+stream's opening and a session event, answered late so that both reads are out together,
+are followed by exactly one more read. Seven reversions in a temporary copy, each failing
+a named assertion.

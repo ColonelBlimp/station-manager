@@ -94,7 +94,16 @@ describe('main.ts: a start that meets a session left open with contacts', () => 
         expect(ft8Streams()).toEqual([]);
 
         // E8: the stream opening makes the page read again, and so does the event.
+        // The daemon is slow to answer, so the two reads are out together:
+        // which of them it served last the page cannot know (the review of
+        // 5f48eaa0), and once both have landed it reads once more, and only once.
         const before = reads();
+        let answerBoth!: () => void;
+        daemon.routes['GET /v1/operating-session'] = {
+            status: 200,
+            body: pending,
+            hold: new Promise<void>((r) => (answerBoth = r)),
+        };
         shellStream().emit('open');
         await vi.waitFor(() => expect(reads()).toBe(before + 1));
         shellStream().emit(
@@ -102,6 +111,8 @@ describe('main.ts: a start that meets a session left open with contacts', () => 
             JSON.stringify({ archive_id: ARCHIVE, generation: 4 })
         );
         await vi.waitFor(() => expect(reads()).toBe(before + 2));
+        answerBoth();
+        await vi.waitFor(() => expect(reads()).toBe(before + 3));
         expect(recovery.status).toBe('question');
         expect(workspace()).toBeNull();
 

@@ -568,8 +568,10 @@ describe('what a read of the state reports', () => {
 // its generation changing: a contact joins and the count goes up; and for one
 // session at one generation the daemon says "open" or "recovery pending"
 // depending on which app is admitted when it is asked. So of two reads that
-// overlap, the answer of the one sent LATER is the newer, whichever arrives
-// first.
+// overlap, the answer of the one sent LATER is kept, whichever arrives first.
+// It is not known to be the newer (the reviews of ff5e855c and 5f48eaa0): the
+// daemon may have served the two in either order. So after any such overlap
+// the page reads once more, with no read out, and ends on that answer.
 describe('two answers at the same generation are ordered by when they were asked', () => {
     const counted = (count: number): SessionStateLike => ({
         archiveId: HOME,
@@ -632,7 +634,11 @@ describe('two answers at the same generation are ordered by when they were asked
         expect(recovery.session?.contactCount).toBe(2);
     });
 
-    it('asks again only when nothing sent later is still on its way', async () => {
+    // The clean-room review of 5f48eaa0: a read that is already out when an
+    // answer is set aside was SENT after the state shown, but the daemon may
+    // have served it before the answer set aside. It settles nothing. Only a
+    // read sent after every answer has arrived is known to be the newest.
+    it('a later read already on its way does not settle it: the page reads once more when it lands', async () => {
         reads.push(ok(counted(1)));
         await readSessionState();
 
@@ -641,19 +647,126 @@ describe('two answers at the same generation are ordered by when they were asked
         reads.push(sentFirst.promise);
         reads.push(ok(counted(3)));
         reads.push(sentThird.promise);
-        const first = readSessionState();
-        await readSessionState(); // the second: drawn
-        const third = readSessionState(); // a third is out, sent after both
+        const first = readSessionState(); // stalls at the daemon
+        await readSessionState(); // the second: three contacts, drawn
+        const third = readSessionState(); // served at once: three; its answer is slow
 
         expect(readsSent).toBe(4);
-        sentFirst.resolve(ok(counted(2))); // refused by its number
+        // A contact is deleted. Then the first read is served: two.
+        sentFirst.resolve(ok(counted(2))); // set aside by its number
         await first;
         await flushPromises();
-        expect(readsSent).toBe(4); // no fifth read: the third of these will settle it
+        expect(readsSent).toBe(4); // nothing is sent while a read is still out
 
-        sentThird.resolve(ok(counted(2)));
+        reads.push(ok(counted(2))); // the read sent once all have landed
+        sentThird.resolve(ok(counted(3))); // drawn: it was sent after the one shown
         await third;
+        await flushPromises();
+
+        expect(readsSent).toBe(5);
+        expect(recovery.session?.contactCount).toBe(2); // what the daemon holds
+        await flushPromises();
+        expect(readsSent).toBe(5); // and that read, alone when out, is the last
+    });
+
+    // The same doubt the other way round: the later-sent read is DRAWN over
+    // the earlier one, by its number, though the daemon served it first.
+    it('a later-sent read drawn over one it overlapped may be the older: the page reads once more', async () => {
+        reads.push(ok(counted(1)));
+        await readSessionState();
+
+        const sentFirst = deferred<SessionReadLike>();
+        const sentSecond = deferred<SessionReadLike>();
+        reads.push(sentFirst.promise);
+        reads.push(sentSecond.promise);
+        const first = readSessionState();
+        const second = readSessionState(); // served first: three contacts
+        const sent = readsSent;
+
+        // A contact is deleted, then the FIRST is served (two) and arrives first.
+        sentFirst.resolve(ok(counted(2)));
+        expect(await first).toBe(true);
+        await flushPromises();
+        expect(readsSent).toBe(sent); // the second is still out
+
+        reads.push(ok(counted(2)));
+        sentSecond.resolve(ok(counted(3))); // drawn by its number: the older in fact
+        expect(await second).toBe(true);
+        await flushPromises();
+
+        expect(readsSent).toBe(sent + 1);
         expect(recovery.session?.contactCount).toBe(2);
+    });
+
+    it('two reads that did not overlap are in order: nothing more is read', async () => {
+        reads.push(ok(counted(1)));
+        await readSessionState();
+        reads.push(ok(counted(2)));
+        await readSessionState();
+        reads.push(ok(counted(3)));
+        await readSessionState();
+        await flushPromises();
+        expect(readsSent).toBe(3);
+        expect(recovery.session?.contactCount).toBe(3);
+    });
+
+    // The read the page sends for itself is a read like any other. If another
+    // overlaps it, one more follows the pair, and then it stops: the reads
+    // never chase one another.
+    it('the extra read is itself overlapped by another: one more after both, and then no more', async () => {
+        const a = deferred<SessionReadLike>();
+        const b = deferred<SessionReadLike>();
+        reads.push(a.promise, b.promise);
+        const first = readSessionState();
+        const second = readSessionState();
+        b.resolve(ok(counted(3)));
+        await second;
+        const extra = deferred<SessionReadLike>();
+        reads.push(extra.promise);
+        a.resolve(ok(counted(3))); // set aside; all have landed: the extra read goes out
+        await first;
+        await flushPromises();
+        expect(readsSent).toBe(3);
+
+        const event = deferred<SessionReadLike>();
+        reads.push(event.promise);
+        const fromEvent = readSessionState(); // something happened while it was out
+        expect(readsSent).toBe(4);
+        event.resolve(ok(counted(3)));
+        await fromEvent;
+        await flushPromises();
+        expect(readsSent).toBe(4); // the extra read is still out: nothing yet
+
+        reads.push(ok(counted(3)));
+        extra.resolve(ok(counted(3))); // set aside: the event's read was drawn while it was out
+        await flushPromises();
+        expect(readsSent).toBe(5); // one more, sent with nothing out
+        await flushPromises();
+        expect(readsSent).toBe(5); // and no more
+        expect(reads).toHaveLength(0);
+    });
+
+    it('a stale refusal set aside for its number is followed by a read, like a read is', async () => {
+        reads.push(ok(question(4)));
+        await readSessionState();
+
+        const refusal = deferred<SessionAnswerLike>();
+        answers.push(refusal.promise);
+        const pressedNow = answerRecovery('continue'); // sent first, answered last
+        reads.push(ok(question(4)));
+        await readSessionState(); // sent second: still the question, drawn
+        const sent = readsSent;
+
+        // The refusal carries the daemon's state as it was served: open. By its
+        // number it is not drawn; which of the two was served last is not known.
+        reads.push(ok(held(4)));
+        refusal.resolve({ kind: 'stale', state: held(4) });
+        await pressedNow;
+        await flushPromises();
+
+        expect(readsSent).toBe(sent + 1);
+        expect(recovery.status).toBe('clear'); // what the daemon holds
+        expect(pressed).toHaveLength(1); // the answer itself is never sent again
     });
 
     it('the question is not dismissed by an earlier read that said open', async () => {
