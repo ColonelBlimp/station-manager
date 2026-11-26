@@ -238,6 +238,15 @@ func (s *Server) handleOperatingSessionRead(w http.ResponseWriter, r *http.Reque
 // question the page has drawn, and New pressed on that question would close the
 // session the running app holds (the clean-room review of 2c362c3d).
 //
+// A session NOBODY holds is the other side of the same restart (Codex,
+// codex-276). A contact logged with no app running opens a session with an
+// empty holder, and before any admission the current lifetime is empty too:
+// the two compared equal, so an app that asked then was told "open". An app
+// already showing the question had it dismissed, and readmission, which
+// changes nothing in the file, published nothing to bring it back. An empty
+// holder is nobody: it is no app's session, whichever app asks and whatever
+// is current. A reader that names no app is told what it was told before.
+//
 // current is the admission's current lifetime
 // as observed with the file, by the caller, and closing whether an archive
 // switch is in its closing phase, observed in the same hold. That state comes
@@ -254,6 +263,8 @@ func (s *Server) sessionResponse(st sqlite.OperatingSessionState, caller, curren
 	case o == nil:
 		resp.State = sessionStateNone
 	case o.HasMembers && o.Holder != current && (caller == "" || o.Holder != caller):
+		resp.State = sessionStateRecoveryPending
+	case o.HasMembers && o.Holder == "" && caller != "":
 		resp.State = sessionStateRecoveryPending
 	default:
 		resp.State = sessionStateOpen

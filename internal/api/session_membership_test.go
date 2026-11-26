@@ -235,9 +235,30 @@ func TestMembership_Route_AContactWithNoAppOpensASessionHeldByNobody(t *testing.
 		t.Fatalf("the read says generation %d and %+v; want generation %d and two contacts", v.Generation, v.Session, start+1)
 	}
 
+	// A named app that reads BEFORE it is admitted is asked too (codex-276). A
+	// restarted daemon has no current lifetime until the shell admits its own
+	// again, and the page's stream reconnects and reads before that. Nobody
+	// holds this session, so it is not that app's: an app already showing the
+	// question must go on showing it. (Before, "held by nobody" compared equal
+	// to "no lifetime is current", the read said open, the question was
+	// dismissed, and no event followed the readmission to bring it back.)
+	early := b.view(lifeA)
+	if early.State != sessionStateRecoveryPending || early.Session == nil || early.Session.ID != session || early.Generation != start+1 {
+		t.Fatalf("a named app, before its admission, reads %q at generation %d with %+v; want to be asked about %s at %d",
+			early.State, early.Generation, early.Session, session, start+1)
+	}
+	if early.Session.HeldByYou {
+		t.Fatal("held_by_you is true for a session nobody holds")
+	}
+	// A reader that names no app is told what it was told before: it is not an
+	// app, has no question to answer, and nothing is withheld from it for one.
+	if nameless := b.view(""); nameless.State != sessionStateOpen {
+		t.Fatalf("a reader that names no app reads %q before any admission; want %q, as before", nameless.State, sessionStateOpen)
+	}
+
 	b.mustBeAdmitted(lifeA)
-	if v := b.view(lifeA); v.State != sessionStateRecoveryPending || v.Session == nil || v.Session.ID != session {
-		t.Fatalf("the next app reads %q with %+v; want to be asked about %s", v.State, v.Session, session)
+	if v := b.view(lifeA); v.State != sessionStateRecoveryPending || v.Session == nil || v.Session.ID != session || v.Generation != start+1 {
+		t.Fatalf("the next app reads %q at generation %d with %+v; want to be asked about %s, the file unchanged", v.State, v.Generation, v.Session, session)
 	}
 }
 

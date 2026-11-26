@@ -20,9 +20,14 @@
     The rules that keep it honest (each has its own test):
       - one rule draws every state, whether it came from a read, an applied
         answer or a stale refusal;
-      - the page never draws a state older than the one it shows, by
-        generation, within one archive: a read sent before an answer cannot put
-        the old question back;
+      - the page never draws a state older than the one it shows, within one
+        archive: by generation, and at the SAME generation by when it was asked
+        for. A state changes without its generation changing (a contact joins
+        and the count rises; the same session reads "open" or "recovery
+        pending" by which app is admitted when the daemon is asked), so of two
+        requests that overlap the answer of the one sent later is the newer,
+        whichever arrives first (codex-276). A read sent before an answer
+        cannot put the old question back;
       - a state is drawn only for the archive the boot has PROVEN. One read
         before that proof, or for another archive, is not drawn and is not
         kept: the page stays as it was. A read SENT before the proof draws
@@ -110,7 +115,10 @@ export const recovery: {
 
 let ports: RecoveryPorts | null = null;
 // The state last drawn: its archive and generation.
-let drawn: { archiveId: string; generation: number } | null = null;
+let drawn: { archiveId: string; generation: number; asked: number } | null = null;
+// Counts the requests sent, reads and answers alike: each takes the next number
+// as it is sent, and that number orders two answers at one generation.
+let asked = 0;
 // Counts the states drawn. A read notes it when it is sent: if it has moved by
 // the time that read fails, something authoritative has been drawn since, by a
 // later read or by an answer, and the failure is obsolete.
@@ -129,18 +137,17 @@ export function recoveryGate(): 'loading' | 'question' | 'unreadable' | null {
     return recovery.status === 'clear' ? null : recovery.status;
 }
 
-// draw is the one rule (E5). It reports whether the state was drawn.
-function draw(state: SessionStateLike): boolean {
+// draw is the one rule (E5). It reports whether the state was drawn. `sentAs`
+// is the number its request took when it was sent.
+function draw(state: SessionStateLike, sentAs: number): boolean {
     const bound = ports?.archive() ?? null;
     if (bound === null || state.archiveId !== bound) return false;
-    if (
-        drawn !== null &&
-        drawn.archiveId === state.archiveId &&
-        state.generation < drawn.generation
-    ) {
-        return false;
+    if (drawn !== null && drawn.archiveId === state.archiveId) {
+        if (state.generation < drawn.generation) return false;
+        // The same generation: the one asked for later is the newer.
+        if (state.generation === drawn.generation && sentAs < drawn.asked) return false;
     }
-    drawn = { archiveId: state.archiveId, generation: state.generation };
+    drawn = { archiveId: state.archiveId, generation: state.generation, asked: sentAs };
     draws++;
     recovery.generation = state.generation;
     ports?.drawn?.(state);
@@ -170,6 +177,7 @@ async function read(uncertain: boolean): Promise<boolean> {
     // archive: it may be older than the read the proof itself sends, and
     // drawing it would also make that read's failure look obsolete.
     const sentFor = ports.archive();
+    const sentAs = ++asked;
     const out = await ports.read();
     if (out.kind === 'ok') {
         if (sentFor === null) return false;
@@ -181,7 +189,7 @@ async function read(uncertain: boolean): Promise<boolean> {
             ports.otherArchive?.(out.state.archiveId);
             return false;
         }
-        const drawnNow = draw(out.state);
+        const drawnNow = draw(out.state, sentAs);
         if (drawnNow && !uncertain) recovery.error = '';
         return drawnNow;
     }
@@ -222,10 +230,11 @@ export async function answerRecovery(answer: RecoveryAnswer): Promise<void> {
     if (session === null) return;
     recovery.answering = true;
     recovery.error = '';
+    const sentAs = ++asked;
     const out = await ports.answer(answer, recovery.generation, session.id);
     if (out.kind === 'applied' || out.kind === 'stale') {
         recovery.answering = false;
-        draw(out.state);
+        draw(out.state, sentAs);
         return;
     }
     // The answer may or may not have been applied: say what went wrong, then
@@ -250,5 +259,6 @@ export function _resetRecoveryForTests(): void {
     recovery.error = '';
     ports = null;
     drawn = null;
+    asked = 0;
     draws = 0;
 }

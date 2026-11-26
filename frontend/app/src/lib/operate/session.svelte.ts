@@ -191,6 +191,19 @@ let stateAsksRead = 0;
 let streamUp = false;
 // Reads of the state this module asked for that have not finished.
 let stateReads = 0;
+// Rows have answered for another session or generation than the one shown, and
+// nothing has been drawn or asked from outside since. The first time, the state
+// is read. If the state is then drawn unchanged and the rows answer the same
+// way again, the daemon's two answers disagree and go on doing so: the page
+// stops and says the session could not be read, with the actions held. It does
+// not ask each for the other for ever (codex-276).
+let disagreed = false;
+// A state question was found open while a read of the state was already out
+// (settleState). If that read ends without settling it, one more is sent: the
+// same rule the rows have. It is set only by something that happened (a
+// session came to be shown, the operator asked again), never by a read
+// failing, so a daemon that cannot be read is not asked in a loop.
+let stateAgain = false;
 
 // mark says whether the rows are behind, and why, from what is known now. It
 // is called after everything that can change the answer.
@@ -219,6 +232,17 @@ function readState(): Promise<boolean> {
         })
         .finally(() => {
             stateReads--;
+            const open = stateAsks > stateAsksRead;
+            if (open && stateAgain && stateReads === 0) {
+                // The read that was out settled nothing (it failed, or the
+                // gate refused its answer: sent before the archive was proven,
+                // or older than the state shown), and the question was asked
+                // again while it was out.
+                stateAgain = false;
+                void readState();
+            } else if (!open) {
+                stateAgain = false;
+            }
             mark();
         });
 }
@@ -361,6 +385,7 @@ export function sessionStateDrawn(state: DrawnSessionState): void {
     session.rows = 'loading';
     session.error = '';
     asks++; // nothing of this session has been read yet
+    disagreed = false;
     settleState();
     readAfresh();
 }
@@ -370,7 +395,9 @@ export function sessionStateDrawn(state: DrawnSessionState): void {
 // the answer to the recovery question), and such a draw does not settle a
 // check that failed earlier: it may be of a read sent before it.
 function settleState(): void {
-    if (stateAsks > stateAsksRead && stateReads === 0) void readState();
+    if (stateAsks <= stateAsksRead) return;
+    if (stateReads === 0) void readState();
+    else stateAgain = true; // one is out: if it settles nothing, ask once more
 }
 
 // Give up a read that is out and send one now.
@@ -445,17 +472,27 @@ function draw(answer: SessionRowsReadLike, sentFor: string | null): boolean {
         // one is what asks for its rows. If that read draws nothing new (it
         // failed), nothing is being read any more, and with no rows on screen
         // the panel must say so and not go on saying it is reading.
+        if (disagreed) {
+            // The second time running: stop. The hold stays, as "failed".
+            if (session.qsos.length === 0) {
+                session.rows = 'failed';
+                session.error = STATE_UNREAD;
+            }
+            return false;
+        }
+        disagreed = true;
         const at = epoch;
         stateAsks++;
         void readState().then(() => {
             if (epoch !== at || shown === null) return; // a state was drawn: its rows are being read
-            if (session.qsos.length === 0) {
+            if (session.qsos.length === 0 && !out) {
                 session.rows = 'failed';
                 session.error = STATE_UNREAD;
             }
         });
         return false;
     }
+    disagreed = false;
     session.qsos = answer.members.map(toRow);
     session.rows = 'ok';
     session.error = '';
@@ -475,6 +512,7 @@ export function refreshSessionRows(): void {
 // now on has been drawn, and one is asked for.
 function ask(): void {
     if (shown === null) return;
+    disagreed = false; // something happened: start over
     asks++;
     // A state question still open (its read failed) is asked again with the
     // rows: "Read again" retries both.
@@ -504,6 +542,7 @@ export function sessionContactStored(sessionId: string | undefined): void {
  */
 export function sessionStreamReopened(): void {
     streamUp = true;
+    disagreed = false;
     // The state is read at every opening (it is the recovery gate's read too),
     // and for a session shown it must answer before the workspace may act.
     stateAsks++;
@@ -524,6 +563,7 @@ export function sessionStreamReopened(): void {
  * the rows that was already out proves nothing.
  */
 export function sessionMayHaveChanged(): void {
+    disagreed = false;
     if (shown !== null) asks++;
     stateAsks++;
     void readState();
@@ -563,6 +603,8 @@ export function _resetSessionForTests(opts: { streamOpen?: boolean } = {}): void
     asks = 0;
     asksRead = 0;
     stateReads = 0;
+    stateAgain = false;
+    disagreed = false;
     mark();
     ports = null;
     ids = {};

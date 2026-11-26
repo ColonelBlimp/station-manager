@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with one correction after the commit's own review (the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) and one more after that commit's own review (the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -5863,3 +5863,68 @@ once at each opening, as before: the read is now made through the Session.
 
 The line-keyed entry for the submit seam in the maintainability baseline moved again, 588
 to 591, with the imports added above it.
+
+### Part 6, slice 2: one more correction, after the review of `9b8c6260` (2026-11-26; uncommitted when written)
+
+The clean-room review of `9b8c6260` found one defect in the counters that commit added, and
+it stands.
+
+**A start in a particular order left export and email held with nothing wrong.** The event
+stream can open before the page has proven its archive. The state read made at that opening
+is then refused by the recovery gate, rightly: it was sent before the proof. Meanwhile the
+load's own read, made at the proof, draws the session and its contacts are read. If the
+refused read's answer came last, the Session's state question was still open, nothing asked
+again, and the reason on screen became "could not be read" although every read had
+answered. The operator would have had to press "Read again" or wait for the next event.
+
+**Corrected.** When a state question is found open while a read of the state is already out,
+that is remembered; if the read then ends without settling the question, one more is sent.
+It is the rule the rows already have. It is set only by something that happened (a session
+came to be shown; the operator asked again) and never by a read failing, so a daemon that
+cannot be read is not asked in a loop.
+
+**Shown.** At the reader, in both orders: the refused read ending after the session is
+drawn is followed by one more, which releases the hold, and no more after that; a state
+check that simply fails is not asked again by itself. And through the real `main.ts`
+(`main.sessionorder.test.ts`): the stream opened before the proof, the opening's state
+answer held and released last. Both seen to fail first, the boundary one with the hold
+never released. Three reversions in a temporary copy, each failing its test.
+
+**A weakness of my own test, found by running the whole suite.** The new boundary test first
+waited at most a second for the page to load; alone it passed, and in the whole suite, with
+every file loading at once, it did not. It now waits on the load itself and gives the
+page's own work ten seconds. Ten runs with every core busy: no failure.
+
+**Codex's review of this correction (codex-276) confirmed the start order fixed and found
+three more, one of them in the daemon. All stand.**
+1. *A daemon restart could dismiss the question for a session held by nobody.* A contact
+   logged with no app running opens a session with an empty holder. Before any admission
+   the daemon's current lifetime is empty too; the two compared equal, and an app that
+   asked then was told `open`. An app already showing the question, whose stream
+   reconnected before the restarted daemon admitted it again, had the question dismissed,
+   and readmission, which changes nothing in the file, published nothing to bring it back.
+   **Now** (`sessionResponse`, `internal/api/operating_session.go`) a session with contacts
+   that no lifetime holds is `recovery_pending` for any caller that names an app, before
+   its admission as well as after. The restart where the app itself holds the session
+   still reads `open`. A reader that names no app is told what it was told before.
+2. *A late state answer could overwrite a newer one at the same generation.* The gate
+   refused a lower generation and took either of two at the same one. But a state changes
+   without its generation changing: a contact joins and the count rises, and the same
+   session reads `open` or `recovery_pending` by which app is admitted when the daemon is
+   asked. Codex showed the count going back, and the question replaced by the workspace
+   from an older read. **Now** every request, read or answer, takes a number as it is sent,
+   and of two answers at one generation the one asked for later is drawn. A higher
+   generation is drawn whenever it was asked for, as before.
+3. *Rows and state that went on disagreeing were asked for ever.* Rows naming another
+   generation ask for the state; a state drawn unchanged asks for the rows. With the two
+   held inconsistent, one event produced thirteen state reads before Codex stopped it.
+   **Now** the second disagreement running stops: the hold stays, the reason is "could not
+   be read", and "Read again" starts over. A daemon that agrees with itself converges on
+   the first try as before.
+
+And the boundary test's waits of ten seconds now have a test limit to match: a wait longer
+than the test may run was no wait.
+
+Tests seen to fail first: one in the daemon's API package (it read `open` at generation 1,
+as Codex found), five on the page. Six reversions in a temporary copy, each failing its
+test.

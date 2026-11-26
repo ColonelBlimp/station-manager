@@ -816,6 +816,54 @@ describe('a state question left open is asked again when a session comes to be s
     });
 });
 
+// The clean-room review of 9b8c6260. At a start the event stream can open
+// before the archive is proven. The state read made at that opening is then
+// refused by the gate (sent before the proof); meanwhile the load's own read
+// draws the session. If the refused read is still out at that moment, nothing
+// asked for the state again, and when it ended the buttons stayed held as
+// "failed" with every read in fact answered.
+describe('a state read that is out when a session is drawn, and then settles nothing', () => {
+    it('is followed by one more, which releases the hold', async () => {
+        _resetSessionForTests({ streamOpen: false });
+        daemon = new Daemon();
+        daemon.connect();
+
+        sessionStreamReopened(); // the stream opens before the archive is proven
+        expect(daemon.stateReads).toBe(1);
+
+        sessionStateDrawn(open(S1, 4)); // the load's own read, after the proof, draws the session
+        expect(daemon.stateReads).toBe(1); // the first is still out: nothing more is asked yet
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+        expect(session.hold).toBe('reading');
+
+        daemon.stateDone[0](false); // refused: it was sent before the proof
+        await settle();
+        expect(daemon.stateReads).toBe(2); // asked again, now that it can be answered
+        expect(session.hold).toBe('reading');
+
+        sessionStateDrawn(open(S1, 4));
+        daemon.stateDone[1](true);
+        await settle();
+        expect(session.behind).toBe(false);
+        expect(session.hold).toBe('');
+        expect(daemon.stateReads).toBe(2); // and no more after that
+    });
+
+    it('a state check that simply fails is not asked again by itself', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 4, [row('G4A')]));
+
+        sessionStreamReopened();
+        await daemon.answer(2, rows(S1, 4, [row('G4A')]));
+        daemon.stateDone[0](false); // the daemon could not be read
+        await settle();
+        await settle();
+
+        expect(daemon.stateReads).toBe(1); // no retry in a loop against a daemon that is down
+        expect(session.hold).toBe('failed');
+    });
+});
+
 describe('before the event stream has opened for the first time', () => {
     it('rows read by then are shown, and are behind until the stream is open and they are read again', async () => {
         _resetSessionForTests({ streamOpen: false }); // a page that has just loaded
@@ -835,5 +883,57 @@ describe('before the event stream has opened for the first time', () => {
         await settle();
         expect(session.behind).toBe(false);
         expect(calls()).toEqual(['K2B', 'G4A']);
+    });
+});
+
+// Codex's review (codex-276). Rows that answer for another session ask for the
+// state; a state drawn unchanged asks for the rows. If the daemon's two answers
+// go on disagreeing, each asks for the other for ever. A stable daemon
+// converges at once; one that does not is said to be unreadable, with the
+// actions held, and is not polled.
+describe('rows and state that go on disagreeing', () => {
+    it('are asked once more each, and then the page stops and says so', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 5, [row('K2B')])); // the rows say generation 5
+        expect(daemon.stateReads).toBe(1);
+
+        sessionStateDrawn(open(S1, 4)); // the state says 4, again
+        daemon.stateDone[0](true);
+        await settle();
+        expect(daemon.sent).toHaveLength(2); // the rows are read once more
+
+        await daemon.answer(2, rows(S1, 5, [row('K2B')])); // and still say 5
+        await settle();
+        expect(daemon.stateReads).toBe(1); // the state is not asked again
+        expect(daemon.sent).toHaveLength(2); // nor the rows
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('failed');
+        expect(session.rows).toBe('failed');
+        expect(calls()).toEqual([]);
+    });
+
+    it('asking again starts over, and can succeed', async () => {
+        sessionStateDrawn(open(S1, 4));
+        await daemon.answer(1, rows(S1, 5, []));
+        sessionStateDrawn(open(S1, 4));
+        daemon.stateDone[0](true);
+        await settle();
+        await daemon.answer(2, rows(S1, 5, []));
+        await settle();
+        expect(session.hold).toBe('failed');
+
+        refreshSessionRows(); // "Read again"
+        expect(daemon.sent).toHaveLength(3);
+        await daemon.answer(3, rows(S1, 5, [row('G4A')])); // the rows still say 5
+        expect(daemon.stateReads).toBe(2); // so the state is asked again: it starts over
+        expect(session.hold).toBe('reading');
+
+        sessionStateDrawn(open(S1, 5)); // and this time the state has moved on to 5
+        daemon.stateDone[1](true);
+        await settle();
+        const last = daemon.sent.length;
+        await daemon.answer(last, rows(S1, 5, [row('G4A')]));
+        expect(calls()).toEqual(['G4A']);
+        expect(session.behind).toBe(false);
     });
 });

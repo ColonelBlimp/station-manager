@@ -553,3 +553,84 @@ describe('what a read of the state reports', () => {
         expect(handed).toEqual([]);
     });
 });
+
+// Codex's review (codex-276). The gate refused an OLDER generation and accepted
+// either of two answers at the SAME one. But a session's state changes without
+// its generation changing: a contact joins and the count goes up; and for one
+// session at one generation the daemon says "open" or "recovery pending"
+// depending on which app is admitted when it is asked. So of two reads that
+// overlap, the answer of the one sent LATER is the newer, whichever arrives
+// first.
+describe('two answers at the same generation are ordered by when they were asked', () => {
+    const counted = (count: number): SessionStateLike => ({
+        archiveId: HOME,
+        generation: 4,
+        state: 'recovery_pending',
+        session: {
+            id: S0,
+            openedAt: '2026-11-20T09:15:00Z',
+            sittingStartedAt: '2026-11-20T09:15:00Z',
+            contactCount: count,
+            heldByYou: false,
+        },
+    });
+
+    it('a count read later is not put back by an earlier read answered last', async () => {
+        reads.push(ok(counted(1)));
+        await readSessionState();
+
+        const older = deferred<SessionReadLike>();
+        reads.push(older.promise); // asked after the second contact
+        reads.push(ok(counted(3))); // asked after the third
+        const first = readSessionState();
+        await readSessionState();
+        expect(recovery.session?.contactCount).toBe(3);
+
+        older.resolve(ok(counted(2)));
+        expect(await first).toBe(false); // not drawn
+        expect(recovery.session?.contactCount).toBe(3);
+    });
+
+    it('the question is not dismissed by an earlier read that said open', async () => {
+        const older = deferred<SessionReadLike>();
+        reads.push(older.promise); // asked first, before this app was admitted
+        reads.push(ok(question(4))); // asked second
+        const first = readSessionState();
+        await readSessionState();
+        expect(recovery.status).toBe('question');
+
+        older.resolve(ok(held(4)));
+        expect(await first).toBe(false);
+        expect(recovery.status).toBe('question');
+        expect(handed.map((s) => s.state)).toEqual(['recovery_pending']);
+    });
+
+    it('a higher generation is drawn whenever it was asked for', async () => {
+        const older = deferred<SessionReadLike>();
+        reads.push(older.promise);
+        reads.push(ok(question(4)));
+        const first = readSessionState();
+        await readSessionState();
+
+        older.resolve(ok(held(5))); // asked earlier, and of a later generation
+        expect(await first).toBe(true);
+        expect(recovery.status).toBe('clear');
+        expect(recovery.generation).toBe(5);
+    });
+
+    it('the state an answer returns is not put back by a read asked before the answer', async () => {
+        reads.push(ok(question(4)));
+        await readSessionState();
+
+        const older = deferred<SessionReadLike>();
+        reads.push(older.promise);
+        const early = readSessionState(); // asked before the operator pressed
+        answers.push({ kind: 'stale', state: held(4) }); // the refusal carries the current state
+        await answerRecovery('continue');
+        expect(recovery.status).toBe('clear');
+
+        older.resolve(ok(question(4)));
+        await early;
+        expect(recovery.status).toBe('clear');
+    });
+});
