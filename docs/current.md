@@ -1,6 +1,6 @@
 # Current work
 
-Updated: 2026-11-26
+Updated: 2026-11-27
 
 - **Goal:** build ADR 0102 in reviewed slices ([`W-0027`](work/W-0027-electron-desktop-host.md)); [`backlog`](backlog.md) owns priority.
 - **State:** ADRs [`0102`](decisions/0102-electron-desktop-host-for-the-ui.md) and 0100 Accepted; 0103 and 0101 **Proposed**. W-0027: A1, C1c, C1d, C2 (operating-client check, at the station), C4 (presence) and D1 (desktop RPM) accepted. A3 (closing) built. W-0028 (P1) built, station test accepted. W-0029 parts 1 to 5 built; part 6: reads and cutover built, not at the station; controls not built.

@@ -95,7 +95,15 @@ import {
 } from './lib/api/ft8qso';
 import { toasts } from './lib/ui/toasts.svelte';
 import { setup, setSetupSave } from './lib/setup.svelte';
-import { readSessionState, sessionArchiveProven, setRecoveryPorts } from './lib/recovery.svelte';
+import {
+    readSessionState,
+    recoveryContactDeleted,
+    recoveryContactStored,
+    recoveryStreamLost,
+    recoveryStreamOpened,
+    sessionArchiveProven,
+    setRecoveryPorts,
+} from './lib/recovery.svelte';
 import { fileUnderArchive } from './lib/operate/archiveStores.svelte';
 import {
     answerOperatingSession,
@@ -756,9 +764,26 @@ openLogEvents({
     // The Session reads the state at every opening, through the gate's own
     // read (its readState port), and reads its rows again: it needs to know
     // when both have answered since.
-    onOpen: sessionStreamReopened,
-    onTransportError: sessionStreamLost,
+    onOpen: () => {
+        // The gate first: the Session's read below is then the first request
+        // of this connection, and nothing sent before it is drawn after it.
+        recoveryStreamOpened();
+        sessionStreamReopened();
+    },
+    onTransportError: () => {
+        // The gate too: nothing sent before the loss is drawn after it.
+        recoveryStreamLost();
+        sessionStreamLost();
+    },
     onQsoChanged: (event, p) => {
+        // The recovery question states a count of contacts, and its gate is
+        // told of a contact stored into a session, or deleted, BEFORE the
+        // Session is: a read of the state the Session then sends is sent after
+        // the contact was counted, so its answer is current. With the question
+        // showing, no session is shown and a deletion reads nothing below.
+        const joined = p.operating_session_id !== undefined && p.operating_session_id !== '';
+        if (event === 'qso.stored' && joined) recoveryContactStored();
+        if (event === 'qso.deleted') recoveryContactDeleted();
         if (event === 'qso.stored') sessionContactStored(p.operating_session_id);
         else refreshSessionRows();
     },

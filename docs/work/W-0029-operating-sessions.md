@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), a third after that commit's own review (`5f48eaa0`), and one more after the review of that (the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), a third after that commit's own review (`5f48eaa0`), a fourth after the review of that (`3d5c339b`), and one more after Codex's review of all four (codex-277; the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -6003,3 +6003,249 @@ never sent again. Three of these were seen to fail first. Through the real page:
 stream's opening and a session event, answered late so that both reads are out together,
 are followed by exactly one more read. Seven reversions in a temporary copy, each failing
 a named assertion.
+
+### Part 6, slice 2: answers in doubt that disagree, and a contact deleted at the question (after codex-277; 2026-11-27; uncommitted when written)
+
+`3d5c339b` is the correction above, committed and pushed on the operator's word; its own
+clean-room review found nothing, and the hosted CI passed on it. Codex then reviewed the
+four corrections together (codex-277), in the real page with the transport simulated, and
+found two defects. Both stand.
+
+**1. The workspace could act on an answer the page knew might be the older.** Two reads of
+the state were out together. The first answered "recovery pending" and the second "open",
+for the same session at the same generation: the daemon says one or the other by which app
+holds the session when it is asked. `3d5c339b` noted that their order was not known and
+sent the read that decides, but meanwhile it drew the later-sent one. So the question went
+away, the contacts were read, and export and email could be sent while the deciding read
+was out. When that read failed, the workspace simply stayed.
+
+**Corrected.** Answers in doubt that agree on whether the workspace may be shown are drawn
+as they come, as before. When they disagree, neither is shown: the page shows what it
+shows before any state is read (nothing of the workspace, and no question), hands the
+Session nothing, and stays so until an answer that is not in doubt arrives. The read that
+decides is the one `3d5c339b` already sends. If it fails, the page says the session could
+not be read and offers "Try again", by the rule that already holds for a read that fails
+with nothing drawn. This holds whichever of the two answers the number rule keeps: an
+"open" set aside while the question shows is withheld the same way, where before the
+question stayed.
+
+**What counts as in doubt changed with it.** An answer is in doubt when another answer of
+its generation ARRIVED while its request was out, whether that one was drawn, set aside or
+withheld. `3d5c339b` counted only answers that were drawn. The difference shows in one
+order: the deciding read is sent when no read is out, but an answer to the recovery
+question can still be out, and when it lands meanwhile and is set aside, the deciding read
+is in doubt too.
+
+**What it costs.** The workspace is taken away while the page waits for the deciding read,
+and with it the FT8 view, so this page has no presence in FT8 for that time. It happens
+only when two reads of the state overlap AND disagree on recovery, which needs the holder
+to change between them: at a reconnection, not in ordinary running.
+
+**2. A contact deleted while the question shows left its count stale.** The question says
+how many contacts the session has. A deleted contact is announced, and the page sends the
+announcement to the Session's rows, which read nothing while no session is shown. Deleting
+the session's only contact left "1 contact" on screen until the stream next reopened.
+
+**Corrected.** A deleted contact, announced while the question shows, makes the gate read
+the state; the question then says the daemon's count, whichever session the contact was
+in. With the workspace showing nothing is asked here: the Session reads its own rows.
+
+**Shown** at the gate: pending then open in doubt shows neither, hands "open" to nobody,
+and ends on the deciding read's answer; the deciding read failing gives "could not be
+read", is not repeated, and "Try again" reads; open then pending in doubt withholds the
+workspace and asks no question yet; an "open" set aside while the question shows is
+withheld the same; answers in doubt that agree are shown at once; once withheld, a further
+answer in doubt shows nothing whatever it says; an answer set aside while the deciding
+read is out leaves that read in doubt, and one more decides. The deletion reads the state
+while the question shows, and not otherwise. Seven of these were seen to fail first.
+Through the real page (`main.recoverydoubt.test.ts`): the deletion's event brings one read
+and the question says "0 contacts"; two reads out together, answered pending and open, give
+a page with no question, no workspace, no button, no request other than reads, no read of
+the contacts and no FT8 request or stream; the deciding read answered 503 gives "The
+session could not be read"; "Try again" brings the question. Eleven reversions in a
+temporary copy, each failing a named assertion.
+
+`main.ts` gained lines above its submit seam (one import), so that seam's line-keyed entry
+in the maintainability baseline is rekeyed, its value unchanged at 20.
+
+**Codex's review of this correction (codex-279; 2026-11-27; in the same uncommitted
+change).** It confirmed the two corrections in the real page and found one order the
+second did not cover. **A deletion that arrives while no question is showing and a read of
+the state is out was forgotten.** In its probe the two answers in doubt had withheld the
+workspace, the deciding read had been served with one contact, the contact was then
+deleted, and the deciding read brought the question back saying "1 contact": the deletion
+had asked nothing, because no question was showing when it came. The same holds for the
+load's read, and for a read sent with the workspace showing that brings the question.
+**Corrected:** a deletion that arrives with no question showing and a read of the state
+out is remembered; if the question is showing when the reads have landed, one read
+follows, by the same single read the gate sends for answers in doubt. It is forgotten
+when the reads land without a question (nothing shows a count then, and any later read is
+sent after the deletion), and a read that fails is not followed. With no read out there is
+nothing to remember. **Shown** at the gate (three seen to fail first) and through the real
+page (the deciding read held, the deletion's event asks nothing, the deciding read brings
+"1 contact", one read follows and the question says "0 contacts"). Six reversions, each
+failing a named assertion.
+
+Codex also corrected the boundary test's stand-in for the daemon: `has_contacts` stays
+true when the last contact is deleted (a deleted contact's membership is kept, and it is
+what makes recovery pending), and one caller can be told "open" and "recovery pending"
+with `held_by_you` false both times. The fixture now answers so.
+
+**Codex's second review of it (codex-280; 2026-11-27; in the same uncommitted change).**
+The deletion case was closed. Two more orders left the question's count stale, and both
+stand. A contact JOINED the session shown while a read of the state was out that brought
+the question: joining a session moves no generation, and only deletions were remembered.
+And a deletion arrived with only the refusal of Continue out, which then brought the
+question back with the count it was taken with: only reads were looked at, not answers.
+
+**Corrected, as one rule in place of the cases.** The question's count is good only if no
+contact was stored into a session or deleted, that the page has heard of, since the
+REQUEST that supplied it was sent, whether that request was a read or an answer. The gate
+counts those changes, each request notes the count when it is sent, and a question drawn
+from an older request is followed by one read, sent when no read is out (the same single
+read as for answers in doubt). The rule of codex-279, a deletion remembered while a read is
+out, is this rule's special case and is removed. The page tells the gate of a stored
+contact that joined a session, and of a deletion, before it tells the Session, so that a
+read of the state the Session then sends counts as sent after it. A stored contact that
+joined no session changes no count and is not told.
+
+**Shown** at the gate: a contact joins while a read is out that brings the question; the
+question comes back from the refusal of an answer sent before a deletion, and the answer
+is sent once; a contact stored with the question showing asks nothing at the gate; a
+deletion at the question with a read out is followed by one read once it has landed, not
+two; a following read that fails leaves the question and is not repeated. Through the real
+page: a contact that joined no session, stored while a read is out, brings no other read; a
+contact stored with the question showing brings exactly one; a contact joining the session
+shown while the stream's read is held brings the question at the old count and then one
+read; Codex's order with Continue held, the workspace shown at the next generation, the
+next read failing and a deletion, ends on the daemon's count with Continue sent once. Ten
+reversions, each failing a named assertion. One of them at first did not fail: my first
+version of the Continue test had a session open in the workspace, and the Session's own
+retry of its failed state read brought the count at the deletion, so the test passed
+without the rule. It now follows Codex's order exactly (no session open), and fails
+without the rule.
+
+**Not built, the operator's to decide (codex-280's last point).** When the read that
+follows fails, the question keeps the older count, with both choices available, no alert
+and no "Try again", until the next read of the state (the next event, or the stream
+reopening). That a failed read takes nothing away from a question that is showing is the
+rule since part 4. Codex recommends marking the count as last known. That is new wording
+on the operator's screen, and an alert for a failure that may be momentary.
+
+`main.ts` gained one more import line, so the submit seam's baseline entry is rekeyed
+again (`line@597`), its value unchanged at 20.
+
+**Codex's third review of it (codex-281; 2026-11-27; in the same uncommitted change).** The
+two count orders were closed. One more finding on the gate, and it stands. **An answer
+from before the event socket was replaced could open the workspace after it.** The page
+was reopened on its FT8 view with the load's reads of the state held, served "open". The
+socket dropped, its replacement opened and the page read afresh; the daemon now said
+"recovery pending" for the same session at the same generation. The earlier answers
+arrived first. Nothing had arrived while they were out, so the gate took them as certain:
+the workspace was shown, FT8 was claimed and its stream opened, until the fresh read
+brought the question. The same happened from a question that was showing.
+
+**Corrected.** Nothing sent before the event stream last opened is drawn after it. The
+gate counts the openings, every request notes the count when it is sent, and a read whose
+count is behind is dropped, answered or failed: it is not shown, not kept, and does not
+count as an arrival. (An answer to the question from before is treated as the next review
+found it must be, below; one that FAILED is not part of this rule: as ever the page says
+what went wrong and reads.) The page tells the gate of an opening before it
+tells the Session, whose read of the state is then the first request of the new
+connection and the one that settles it. If that read fails with nothing shown, the page
+says the session could not be read, by the rule for a failed read with nothing drawn. An
+answer to the recovery question that is dropped this way leaves what it did unknown, so
+one read is owed for it, sent when no read is out. It is the same rule the load already
+has for a read sent before the archive was proven.
+
+**Shown** at the gate: an earlier "open" with nothing shown leaves the workspace withheld
+and the Session told nothing, and the fresh read decides, pending or open; with the
+question showing it is not dismissed; the fresh read failing gives "could not be read" and
+the earlier answer changes nothing; an earlier read that FAILS after the opening says
+nothing either; the refusal of an answer sent before the opening is not drawn, the
+choices come back, and one read follows the fresh one. Six seen to fail a named assertion
+first. Through the real page, in two files so that each proves its rule alone: from a
+withheld workspace, the socket replaced and the earlier "open" released first, the page
+shows nothing, sends no request that is not a read and makes no FT8 request or stream,
+then the fresh "recovery pending" brings the question; from the question, the earlier
+"open" leaves it standing, and the fresh "open" brings the workspace and FT8 only then.
+Ten reversions, each failing a named assertion.
+
+Also from codex-281: a comment in the gate had the timing backwards (the daemon takes the
+count AFTER the request is sent, not before); corrected. And Codex's recommendation on
+the question left to the operator above: option (b), with the words "The contact count
+could not be refreshed. The number shown is the last count received." Not decided.
+
+`main.ts` gained another import line; the submit seam's baseline entry is rekeyed once
+more, its value unchanged at 20.
+
+**Codex's fourth review of it (codex-282; 2026-11-27; in the same uncommitted change).**
+The order of codex-281 was closed. Two more ways to the workspace before the fresh state
+was known, and both stand.
+
+**1. During the outage.** The gate heard the stream open but not its loss. With the
+question showing, a read answered "open" before the socket dropped arrived while the
+replacement was still connecting: the question went, the workspace and FT8 came, and they
+stayed through the reconnect until the fresh read. **Corrected:** the gate counts the
+loss as it counts the opening. Nothing sent before the connection last changed, lost or
+opened, is drawn after it. A read sent during the outage is drawn if it answers during
+it, and the opening that ends the outage reads afresh. One consequence needed its own
+rule: after a loss nothing reads until the stream opens, so when a dropped answer leaves
+nothing shown and no read has been sent since the loss, the page says the session could
+not be read and offers "Try again", rather than stay blank. That is not said after an
+opening, whose own read has been sent and whose finding stands (an existing test of the
+archive check caught my first version doing so).
+
+**2. While the result of Continue is being checked.** Continue was pressed once, the
+socket was replaced and the page read afresh, and Continue was then refused with recovery
+pending at the next generation. The refusal, sent on the old connection, was dropped, and
+a read was owed; but the reconnect's read, already out, then answered "open" for that
+generation and opened the workspace, and when the owed read failed it stayed open.
+**Corrected:** an answer to the question from the old connection is still never shown, but
+it is now recorded, withholds the workspace, and puts every request sent before it arrived
+in doubt against it. A read that was already out therefore decides nothing. Nothing is
+shown until a read sent after the answer arrived has answered; if that read fails, the
+page says the session could not be read, with "Try again". Continue is sent once.
+
+**Shown** at the gate: an earlier "open" arriving during the outage does not dismiss the
+question; with nothing shown it shows nothing and the page says it could not be read; with
+a read sent during the outage still out it waits for that read; a read sent during the
+outage is not drawn once the stream has opened; after an opening whose own read reported
+another archive, a late earlier answer leaves the page as it is; after Continue and a
+reconnect, the reconnect read's "open" is withheld until a later read decides, a failed
+deciding read gives "could not be read", and an applied answer from the old connection is
+shown by the read that follows it and not before. Seven seen to fail a named assertion
+first. Through the real page, one file each: the outage from the question
+(`main.recoveryoutage.test.ts`), the outage from a withheld workspace
+(`main.recoveryoutage.withheld.test.ts`), and Continue refused after a reconnect, with the
+deciding read answered 503 and then "Try again" (`main.recoverycontinue.test.ts`): no
+workspace, no FT8 request or stream, one Continue. Fifteen reversions, each failing a
+named expectation.
+
+`main.ts` gained one more import line; the submit seam's baseline entry is rekeyed
+(`line@599`), its value unchanged at 20.
+
+**The operator's ruling on the failed count refresh (2026-11-27, in chat: "(a) mine"), and
+its build, in the same uncommitted change.** The question left open after codex-280 had two
+recommendations: (a) the existing alert line under the question with the read's own
+failure message, no new words (Claude); (b) a new sentence, "The contact count could not be
+refreshed. The number shown is the last count received." (Codex). The operator chose (a).
+
+**Built.** The read the gate owes for the question's count is marked as such when it is
+sent. If it fails with the question still showing and no state drawn since it was sent,
+the question shows the read's own failure message on the line it already has for what
+went wrong (the one a failed answer uses). The count shown is the last one received; both
+choices stay available; the read is not repeated; and the next read of the state that is
+drawn clears the line, as it always has. Nothing else changes: a read that fails with the
+question showing and no count owed says nothing, as since part 4, and the read that
+settles two answers in doubt is not a read for the count.
+
+**Shown** at the gate: the message, the question, the last count and the choices after the
+owed read fails; cleared by the next read drawn; the same when the question itself came
+from a request older than a change; nothing said for a failed read with no count owed, for
+the read that settles answers in doubt, or when a newer state has been drawn since. Three
+seen to fail first. Through the real page (`main.recoverycount.test.ts`): the question at
+one contact, the contact deleted, the read answered 503 with a message: that message in
+the alert, "has 1 contact." still, both buttons enabled, no "Try again", one read; then a
+read that is drawn: "has 0 contacts." and no alert. Seven reversions, each failing a named
+expectation.
