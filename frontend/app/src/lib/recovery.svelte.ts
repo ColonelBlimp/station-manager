@@ -69,7 +69,19 @@
         then not known: nothing is shown until a read sent after it arrived
         has answered, and a read that was already out decides nothing. An
         answer that FAILED is not part of this: as ever, the page says what
-        went wrong and reads;
+        went wrong and reads. If the connection changes while THAT read is
+        out, the choices stay disabled until a read on the new connection
+        has been drawn, or the page says the session could not be read (the
+        review of d7bcf9e5);
+      - nothing sent before an answer FAILED is drawn after it, whether it
+        answers or fails: the daemon may have served it before it met the
+        answer, so it cannot say what the answer did. The read the failure
+        sends, or one sent later still, is what the page goes by. The
+        choices come back only for the answer whose outcome was owed: the
+        end of an earlier answer's read gives nothing back while a later
+        answer is out (codex-284). Such a read still reports an answer for
+        ANOTHER archive than the one it was sent for: that starts the page's
+        archive check, and nothing else may (codex-285);
       - a read that fails takes away nothing that was drawn. It makes the
         page unreadable only when nothing has been drawn yet, or when an
         answer has just failed and what the daemon holds is not known; and
@@ -197,6 +209,16 @@ let recount = false;
 let links = 0;
 // How many reads have been sent since the connection last changed.
 let readsThisLink = 0;
+// The number of requests sent when an answer to the question last FAILED; 0
+// when none has. A read numbered at or below it was sent before that failure,
+// and says nothing of what the answer did: it is not drawn (codex-284).
+let failedAt = 0;
+// An answer to the question FAILED and nothing drawn since says what the
+// daemon holds: the choices stay disabled, and a read that fails says the
+// session could not be read (the review of d7bcf9e5). It holds that failure's
+// `failedAt`, which names the answer the debt belongs to; 0 when nothing is
+// owed. Only one answer is out at a time, so there is one debt at most.
+let owed = 0;
 // Counts the states drawn. A read notes it when it is sent: if it has moved by
 // the time that read fails, something authoritative has been drawn since, by a
 // later read or by an answer, and the failure is obsolete.
@@ -346,26 +368,48 @@ function settle(): void {
 // operator's ruling, 2026-11-27). Any other read that fails with a question
 // showing says nothing, as ever.
 async function read(uncertain: boolean, forCount = false): Promise<boolean> {
-    if (ports === null) return false;
+    return (await readToItsEnd(uncertain, forCount)) === 'drawn';
+}
+
+async function readToItsEnd(uncertain: boolean, forCount = false): Promise<ReadEnd> {
+    if (ports === null) return 'undrawn';
     readsOut++;
     let end: ReadEnd = 'undrawn';
     try {
         end = await readOnce(ports, uncertain, forCount);
-        return end === 'drawn';
+        return end;
     } finally {
         readsOut--;
         settle();
-        // An answer dropped for its connection, with nothing shown and no
-        // read sent since the connection changed (settle may just have sent
-        // one): that is a LOSS, after which nothing reads until the stream
-        // opens. The page says what it knows and offers "Try again" rather
-        // than stay blank. (An opening always sends a read; what that read
-        // found stands. A read sent during the outage is waited for.)
-        if (end === 'dropped' && readsThisLink === 0 && recovery.status === 'loading') {
+        // An answer dropped for its connection, with no read sent since the
+        // connection changed (settle may just have sent one): that is a
+        // LOSS, after which nothing reads until the stream opens. If nothing
+        // is shown, or what a failed answer did is still owed, the page says
+        // what it knows and offers "Try again" rather than stay blank, or
+        // stay on a question nobody may answer. (An opening always sends a
+        // read; what that read found stands. A read sent during the outage
+        // is waited for.)
+        if (
+            end === 'dropped' &&
+            readsThisLink === 0 &&
+            (recovery.status === 'loading' || owed !== 0)
+        ) {
             recovery.status = 'unreadable';
             recovery.session = null;
         }
+        // What a failed answer did is known once a read has been drawn, or
+        // the page has said it could not read: the choices may come back.
+        // (A read that was drawn was sent after the failure: none from
+        // before it is drawn.)
+        if (owed !== 0 && (end === 'drawn' || recovery.status === 'unreadable')) release();
     }
+}
+
+// What the failed answer did is known, or the page has said it is not: its
+// debt is paid, and the choices may come back.
+function release(): void {
+    owed = 0;
+    recovery.answering = false;
 }
 
 // How a read ended: its answer was drawn; it was not (it failed, or was refused
@@ -389,6 +433,10 @@ async function readOnce(p: RecoveryPorts, uncertain: boolean, forCount: boolean)
     // Sent before the event stream's connection last changed: it says nothing
     // now, whether it answered or failed. An opening sends the read to draw.
     if (linkWhenSent !== links) return 'dropped';
+    // Sent before an answer to the question failed: the daemon may have
+    // served it before it met that answer, so it says nothing of what the
+    // answer did, answered or failed. The read the failure sent decides.
+    const beforeFailure = sentAs <= failedAt;
     if (out.kind === 'ok') {
         if (sentFor === null) return 'undrawn';
         if (out.state.archiveId !== sentFor) {
@@ -396,16 +444,20 @@ async function readOnce(p: RecoveryPorts, uncertain: boolean, forCount: boolean)
             // that the daemon serves another archive now. It is not drawn, and
             // it starts the page's archive check (codex-275): when the event
             // stream opens on that daemon for the first time, nothing else does.
+            // That holds for a read from before a failed answer too: its state
+            // says nothing, but which archive answered it does (codex-285).
             p.otherArchive?.(out.state.archiveId);
             return 'undrawn';
         }
+        if (beforeFailure) return 'undrawn';
         const drawnNow = take(out.state, sentAs, arrivalsWhenSent, changesWhenSent);
         if (drawnNow && !uncertain) recovery.error = '';
         return drawnNow ? 'drawn' : 'undrawn';
     }
+    if (beforeFailure) return 'undrawn';
     if (draws !== drawsWhenSent) return 'undrawn'; // obsolete: a state has been drawn since this was sent
     const nothingDrawn = recovery.status === 'loading' || recovery.status === 'unreadable';
-    if (nothingDrawn || uncertain) {
+    if (nothingDrawn || uncertain || owed !== 0) {
         recovery.status = 'unreadable';
         recovery.session = null;
         recovery.error = out.message;
@@ -515,11 +567,26 @@ export async function answerRecovery(answer: RecoveryAnswer): Promise<void> {
     // answer can be pressed until that read has settled: the buttons stay
     // disabled, so a second answer is never sent on a state the page is still
     // finding out about.
+    //
+    // If the connection changes while that read is out, the read is dropped
+    // like any other from before, and the choices do NOT come back for it:
+    // the debt stays (`owed`) until a read has been drawn or the page says
+    // the session could not be read (the review of d7bcf9e5).
+    //
+    // Every request sent up to now was sent before this failure, and none of
+    // them is drawn from here on. The debt is THIS answer's: when its read
+    // ends, the choices come back only if the debt is still this one. A read
+    // sent later may have paid it already, and another answer may be out by
+    // then, or have failed in its turn (codex-284).
     recovery.error = out.message;
+    failedAt = asked;
+    const mine = failedAt;
+    owed = mine;
+    let end: ReadEnd = 'undrawn';
     try {
-        await read(true);
+        end = await readToItsEnd(true);
     } finally {
-        recovery.answering = false;
+        if (end !== 'dropped' && owed === mine) release();
     }
 }
 
@@ -540,6 +607,8 @@ export function _resetRecoveryForTests(): void {
     changes = 0;
     links = 0;
     readsThisLink = 0;
+    owed = 0;
+    failedAt = 0;
     arrivals = 0;
     draws = 0;
 }

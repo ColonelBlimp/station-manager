@@ -7,7 +7,7 @@
     "type": "module",
     "main": "src/main.mjs",
     "engines": {
-        "node": ">=22"
+        "node": "^22.13.0 || 24.x"
     },
     "scripts": {
         "start": "electron .",

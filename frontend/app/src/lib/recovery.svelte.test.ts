@@ -1750,3 +1750,325 @@ describe('after an answer from before the connection changed, a read already out
         expect(recovery.generation).toBe(5);
     });
 });
+
+// The clean-room review of d7bcf9e5. After an answer FAILS the page reads what
+// the daemon holds, and no answer can be pressed until that is known. If the
+// connection changes while that read is out, the read is dropped like any
+// other from before; but the choices must not come back for it. They come back
+// when a read sent on the new connection has been drawn, or the page says the
+// session could not be read.
+describe('an answer failed, and the connection changes while the page finds out what it did', () => {
+    const failedAnswer: SessionAnswerLike = {
+        kind: 'failed',
+        message: 'the session could not be changed',
+    };
+
+    async function pressedAndFailed(): Promise<{
+        finding: { resolve: (v: SessionReadLike) => void };
+        pressedNow: Promise<void>;
+    }> {
+        reads.push(ok(question(4)));
+        await readSessionState();
+        answers.push(failedAnswer);
+        const finding = deferred<SessionReadLike>();
+        reads.push(finding.promise);
+        const pressedNow = answerRecovery('continue');
+        await flushPromises();
+        expect(readsSent).toBe(2); // the read that finds out is out
+        expect(recovery.answering).toBe(true);
+        return { finding, pressedNow };
+    }
+
+    it('the stream is lost: the read is dropped, and the page says the session could not be read; the choices do not come back on the old question', async () => {
+        const { finding, pressedNow } = await pressedAndFailed();
+        recoveryStreamLost();
+        finding.resolve(ok(question(4))); // answered, but for the connection that is gone
+        await pressedNow;
+        await flushPromises();
+        expect(recovery.status).toBe('unreadable'); // not the question with both choices enabled
+        expect(recovery.error).toBe('the session could not be changed');
+        expect(pressed).toHaveLength(1);
+
+        reads.push(ok(held(5))); // "Try again": the answer had been applied
+        expect(await readSessionState()).toBe(true);
+        expect(recovery.status).toBe('clear');
+        expect(recovery.answering).toBe(false);
+    });
+
+    it("the stream is replaced: the choices stay disabled until the new connection's read is drawn", async () => {
+        const { finding, pressedNow } = await pressedAndFailed();
+        recoveryStreamLost();
+        recoveryStreamOpened();
+        const fresh = deferred<SessionReadLike>();
+        reads.push(fresh.promise);
+        const second = readSessionState(); // the opening's read
+
+        finding.resolve(ok(question(4)));
+        await pressedNow;
+        await flushPromises();
+        expect(recovery.status).toBe('question');
+        expect(recovery.answering).toBe(true); // what the answer did is still not known
+        await answerRecovery('new'); // pressed anyway: nothing is sent
+        expect(pressed).toHaveLength(1);
+
+        fresh.resolve(ok(question(4))); // it had not been applied
+        expect(await second).toBe(true);
+        expect(recovery.status).toBe('question');
+        expect(recovery.answering).toBe(false); // now the choices are back
+        expect(readsSent).toBe(3);
+    });
+
+    it("the stream is replaced and the new connection's read fails: the session could not be read", async () => {
+        const { finding, pressedNow } = await pressedAndFailed();
+        recoveryStreamLost();
+        recoveryStreamOpened();
+        reads.push(failed);
+        const second = readSessionState();
+        finding.resolve(ok(question(4)));
+        await pressedNow;
+        expect(await second).toBe(false);
+        await flushPromises();
+        expect(recovery.status).toBe('unreadable'); // not the old question, enabled
+        expect(recovery.answering).toBe(false);
+        expect(pressed).toHaveLength(1);
+
+        reads.push(ok(question(4))); // "Try again"
+        expect(await readSessionState()).toBe(true);
+        expect(recovery.status).toBe('question');
+        expect(recovery.answering).toBe(false);
+    });
+
+    it('no change of connection: as ever, the choices come back when the read that finds out has answered', async () => {
+        const { finding, pressedNow } = await pressedAndFailed();
+        finding.resolve(ok(question(4)));
+        await pressedNow;
+        expect(recovery.status).toBe('question');
+        expect(recovery.answering).toBe(false);
+        expect(recovery.error).toBe('the session could not be changed');
+    });
+});
+
+// Codex's review of that fix (codex-284), through the real renderer: a read
+// SENT BEFORE the answer failed cannot say what the answer did. It may have
+// been served before the daemon met the answer. So nothing sent before an
+// answer failed is drawn after it, whether it answers or fails; the read the
+// failure sends, or one sent later still, is what the page goes by. And the
+// choices are given back only for the answer whose outcome was owed: the end
+// of an EARLIER answer's read must not enable them while a later answer is out.
+describe('an answer failed: nothing sent before the failure says what it did', () => {
+    const failedAnswer: SessionAnswerLike = {
+        kind: 'failed',
+        message: 'the session could not be changed',
+    };
+    const questionOf = (contactCount: number): SessionStateLike => {
+        const q = question(4);
+        return { ...q, session: { ...q.session!, contactCount } };
+    };
+
+    // The question shows; a read is out (`earlier`); Continue is pressed and
+    // fails; the read that finds out is out too (`finding`).
+    async function earlierReadThenFailure(): Promise<{
+        earlier: { resolve: (v: SessionReadLike) => void };
+        earlierRead: Promise<boolean>;
+        finding: { resolve: (v: SessionReadLike) => void };
+        pressedNow: Promise<void>;
+    }> {
+        reads.push(ok(question(4)));
+        await readSessionState();
+        const earlier = deferred<SessionReadLike>();
+        reads.push(earlier.promise);
+        const earlierRead = readSessionState();
+        answers.push(failedAnswer);
+        const finding = deferred<SessionReadLike>();
+        reads.push(finding.promise);
+        const pressedNow = answerRecovery('continue');
+        await flushPromises();
+        expect(readsSent).toBe(3);
+        expect(recovery.answering).toBe(true);
+        return { earlier, earlierRead, finding, pressedNow };
+    }
+
+    it('a read sent before the failure answers first: it is not drawn and the choices stay disabled; the read that finds out brings them back', async () => {
+        const { earlier, earlierRead, finding, pressedNow } = await earlierReadThenFailure();
+        earlier.resolve(ok(questionOf(9)));
+        expect(await earlierRead).toBe(false);
+        await flushPromises();
+        expect(recovery.status).toBe('question');
+        expect(recovery.session?.contactCount).toBe(3); // not drawn
+        expect(recovery.answering).toBe(true); // what the answer did is still not known
+        await answerRecovery('new'); // pressed anyway: nothing is sent
+        expect(pressed).toHaveLength(1);
+
+        finding.resolve(ok(questionOf(5)));
+        await pressedNow;
+        expect(recovery.status).toBe('question');
+        expect(recovery.session?.contactCount).toBe(5);
+        expect(recovery.answering).toBe(false);
+        expect(readsSent).toBe(3);
+    });
+
+    it('a read sent before the failure FAILS: it says nothing, and the page waits for the read that finds out', async () => {
+        const { earlier, earlierRead, finding, pressedNow } = await earlierReadThenFailure();
+        earlier.resolve(failed);
+        expect(await earlierRead).toBe(false);
+        await flushPromises();
+        expect(recovery.status).toBe('question'); // not "could not be read"
+        expect(recovery.error).toBe('the session could not be changed');
+        expect(recovery.answering).toBe(true);
+
+        finding.resolve(ok(held(5))); // the answer had been applied
+        await pressedNow;
+        expect(recovery.status).toBe('clear');
+        expect(recovery.answering).toBe(false);
+    });
+
+    it('the read that finds out fails: a read sent before the failure cannot put the question back', async () => {
+        const { earlier, earlierRead, finding, pressedNow } = await earlierReadThenFailure();
+        finding.resolve(failed);
+        await pressedNow;
+        expect(recovery.status).toBe('unreadable');
+
+        earlier.resolve(ok(question(4)));
+        expect(await earlierRead).toBe(false);
+        await flushPromises();
+        expect(recovery.status).toBe('unreadable'); // not the question, with its choices enabled
+        expect(pressed).toHaveLength(1);
+
+        reads.push(ok(question(4))); // "Try again"
+        expect(await readSessionState()).toBe(true);
+        expect(recovery.status).toBe('question');
+        expect(recovery.answering).toBe(false);
+    });
+
+    // codex-285: setting such a read aside must not swallow what it says of the
+    // ARCHIVE. Answered for another archive than the one proven when it was
+    // sent, it is positive word that the daemon serves another archive now,
+    // and nothing else may start the page's archive check.
+    it('a read sent before the failure is answered for ANOTHER archive: nothing is drawn, and the archive check is started', async () => {
+        const { earlier, earlierRead, finding, pressedNow } = await earlierReadThenFailure();
+        finding.resolve(failed);
+        await pressedNow;
+        expect(recovery.status).toBe('unreadable');
+        expect(others).toEqual([]);
+
+        earlier.resolve(ok(held(9, S1, OTHER)));
+        expect(await earlierRead).toBe(false);
+        await flushPromises();
+        expect(others).toEqual([OTHER]);
+        expect(recovery.status).toBe('unreadable'); // nothing of the other archive is drawn
+        expect(handed.every((h) => h.archiveId === HOME)).toBe(true);
+        expect(pressed).toHaveLength(1);
+    });
+
+    it('the same, answered before the read that finds out: reported, and the choices stay disabled', async () => {
+        const { earlier, earlierRead, finding, pressedNow } = await earlierReadThenFailure();
+        earlier.resolve(ok(held(9, S1, OTHER)));
+        expect(await earlierRead).toBe(false);
+        await flushPromises();
+        expect(others).toEqual([OTHER]);
+        expect(recovery.status).toBe('question');
+        expect(recovery.answering).toBe(true);
+        await answerRecovery('new');
+        expect(pressed).toHaveLength(1);
+
+        finding.resolve(failed);
+        await pressedNow;
+        expect(recovery.status).toBe('unreadable');
+    });
+
+    it('a read sent WHILE the answer was out, before it failed, is not drawn either', async () => {
+        reads.push(ok(question(4)));
+        await readSessionState();
+        const answer = deferred<SessionAnswerLike>();
+        answers.push(answer.promise);
+        const pressedNow = answerRecovery('continue');
+        await flushPromises();
+        const during = deferred<SessionReadLike>();
+        reads.push(during.promise);
+        const duringRead = readSessionState(); // the last request sent before the failure
+        const finding = deferred<SessionReadLike>();
+        reads.push(finding.promise);
+        answer.resolve(failedAnswer);
+        await flushPromises();
+        expect(readsSent).toBe(3);
+
+        during.resolve(ok(questionOf(9)));
+        expect(await duringRead).toBe(false);
+        await flushPromises();
+        expect(recovery.session?.contactCount).toBe(3); // not drawn
+        expect(recovery.answering).toBe(true);
+
+        finding.resolve(ok(question(4)));
+        await pressedNow;
+        expect(recovery.answering).toBe(false);
+    });
+
+    // The question shows; Continue fails and its read (`finding`) is out; a
+    // read sent AFTER the failure is drawn, so the choices are back.
+    async function failureThenLaterRead(): Promise<{
+        finding: { resolve: (v: SessionReadLike) => void };
+        pressedNow: Promise<void>;
+    }> {
+        reads.push(ok(question(4)));
+        await readSessionState();
+        answers.push(failedAnswer);
+        const finding = deferred<SessionReadLike>();
+        reads.push(finding.promise);
+        const pressedNow = answerRecovery('continue');
+        await flushPromises();
+        reads.push(ok(question(4)));
+        expect(await readSessionState()).toBe(true); // sent after the failure, and drawn
+        expect(recovery.status).toBe('question');
+        expect(recovery.answering).toBe(false);
+        return { finding, pressedNow };
+    }
+
+    it("a second answer is out when the first answer's read ends: the choices stay disabled, and no third answer is sent", async () => {
+        const { finding, pressedNow } = await failureThenLaterRead();
+        const second = deferred<SessionAnswerLike>();
+        answers.push(second.promise);
+        const pressedAgain = answerRecovery('new');
+        await flushPromises();
+        expect(pressed).toHaveLength(2);
+        expect(recovery.answering).toBe(true);
+
+        reads.push(ok(question(4))); // the one more read two overlapped reads are settled by
+        finding.resolve(ok(question(4)));
+        await pressedNow; // the first answer has run to its end
+        await flushPromises();
+        expect(recovery.answering).toBe(true); // the second answer is still out
+        await answerRecovery('continue'); // pressed anyway: nothing is sent
+        expect(pressed).toHaveLength(2);
+
+        second.resolve({ kind: 'applied', state: noSession(5) });
+        await pressedAgain;
+        expect(recovery.status).toBe('clear');
+        expect(recovery.answering).toBe(false);
+    });
+
+    it("a second answer FAILS: the first answer's read, sent before that failure, does not bring the choices back", async () => {
+        const { finding, pressedNow } = await failureThenLaterRead();
+        answers.push(failedAnswer);
+        const findingSecond = deferred<SessionReadLike>();
+        reads.push(findingSecond.promise);
+        const pressedAgain = answerRecovery('new');
+        await flushPromises();
+        expect(pressed).toHaveLength(2);
+        expect(recovery.answering).toBe(true);
+
+        // A later generation, so that no other rule sets it aside: only when
+        // it was sent keeps it from being drawn.
+        finding.resolve(ok({ ...questionOf(9), generation: 5 }));
+        await pressedNow;
+        await flushPromises();
+        expect(recovery.session?.contactCount).toBe(3); // not drawn
+        expect(recovery.answering).toBe(true);
+        await answerRecovery('continue');
+        expect(pressed).toHaveLength(2);
+
+        findingSecond.resolve(ok(question(4)));
+        await pressedAgain;
+        expect(recovery.status).toBe('question');
+        expect(recovery.answering).toBe(false);
+    });
+});

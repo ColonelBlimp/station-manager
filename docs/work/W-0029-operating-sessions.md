@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), a third after that commit's own review (`5f48eaa0`), a fourth after the review of that (`3d5c339b`), and one more after Codex's review of all four (codex-277; the last section; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), a third after that commit's own review (`5f48eaa0`), a fourth after the review of that (`3d5c339b`), a fifth after Codex's reviews of all four in the real page (codex-277 to codex-282; `d7bcf9e5`), and one more after that commit's own review and Codex's two reviews of it (codex-284, codex-285; the last two sections; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -6249,3 +6249,115 @@ one contact, the contact deleted, the read answered 503 with a message: that mes
 the alert, "has 1 contact." still, both buttons enabled, no "Try again", one read; then a
 read that is drawn: "has 0 contacts." and no alert. Seven reversions, each failing a named
 expectation.
+
+### Part 6, slice 2: a failed answer and a change of connection (after the review of `d7bcf9e5`; 2026-11-27; uncommitted when written)
+
+`d7bcf9e5` is everything above from codex-277 on, committed and pushed on the operator's
+word after the whole local CI passed. Its clean-room review found one defect, and it
+stands.
+
+**The choices came back on a state nobody had confirmed.** When Continue or New fails, the
+page says what went wrong and reads what the daemon holds, and both choices stay disabled
+until that read has answered. `d7bcf9e5` made a read from before a change of connection
+say nothing. So if the connection changed while THAT read was out, it was dropped, and the
+code that waited for it then enabled both choices again, on the old question, without
+knowing whether the answer had been applied. Before `d7bcf9e5` the read was drawn, or its
+failure said the session could not be read.
+
+**Corrected.** The debt outlives the read. When the read sent to find out what a failed
+answer did is dropped for its connection, the choices stay disabled, and they come back
+only when a read has been drawn or the page has said the session could not be read. While
+the debt stands, a read that fails says the session could not be read, as the first one
+would have. After a loss, where nothing reads until the stream opens, the page says so at
+once and offers "Try again", with the answer's own failure message still shown; after a
+replacement, the read the opening sends settles it.
+
+**Shown** at the gate: the stream lost, the read dropped: "could not be read", the answer's
+message, and "Try again" reads; the stream replaced: the choices stay disabled, a press
+sends nothing, and they come back when the new connection's read is drawn; that read
+failing: "could not be read"; with no change of connection, as ever. Three seen to fail a
+named assertion first. Through the real page, one file each
+(`main.recoveryanswerfail.test.ts`, `main.recoveryanswerfail.reopened.test.ts`): Continue
+answered 503, the read held, the socket dropped or replaced, the read released: no enabled
+choice on the old question, one Continue POST. Nine reversions, each failing a named
+expectation.
+
+### Part 6, slice 2: nothing sent before a failed answer says what it did (after codex-284; 2026-11-27; uncommitted when written)
+
+Codex reviewed the section above through the real page, before it was committed, and found
+two orders of events in which a second answer could be sent while the page was still
+finding out what a failed one had done. Both stand.
+
+**1. A read sent before the answer gave the choices back.** The section above released the
+choices when ANY read was drawn. A read already out when Continue was pressed, answering
+after the 503 with the same question, enabled both choices while the read sent to find out
+was still out; New could then be sent. The daemon may have served that earlier read before
+it met the answer, so it cannot say what the answer did.
+
+**2. An earlier answer's read gave the choices back to a later answer.** Continue failed
+and its read was slow. A read sent after the failure answered, so the choices came back,
+correctly, and New was pressed. When the first answer's slow read then ended, the code
+that waited for it cleared the one flag both answers shared, and Continue could be sent a
+third time while New was out.
+
+**Corrected, as one rule and one ownership.** Nothing sent before an answer failed is drawn
+after it, whether it answers or fails; this is the rule a change of connection already
+has. The failure notes the number of requests sent (`failedAt`), and a read numbered at or
+below it is set aside. The read the failure sends, or one sent later still, is what the
+page goes by, so a read that is drawn was necessarily sent after the failure. The debt
+(`owed`) holds that number and so names the answer it belongs to: when an answer's own
+read ends, the choices come back only if the debt is still that answer's. A read set aside
+this way also cannot put the question back, with its choices, after the page has said the
+session could not be read; before this section it could.
+
+The Session is not left waiting by a read of its own that is set aside: a state question
+left open is asked again when a session comes to be shown, or when the read that was out
+ends without settling it (`settleState`, `readState` in `session.svelte.ts`, unchanged).
+
+**Shown** at the gate, six cases, each seen to fail a named assertion before the code was
+written or under its reversion: a read sent before the failure, answering first, is not
+drawn and enables nothing; the same read failing says nothing; it cannot put the question
+back after "could not be read"; a read sent while the answer was out, the last request
+before the failure, is not drawn either; with a second answer out, the end of the first
+answer's read leaves the choices disabled and no third answer is sent; with a second
+answer failed, the first answer's read does not pay its debt. Through the real page, one
+file each (`main.recoveryanswerfail.earlier.test.ts`,
+`main.recoveryanswerfail.second.test.ts`): Codex's two sequences, by button clicks and the
+requests recorded. Sixteen reversions, each failing a named expectation: nine for the two
+rules here, and seven for the rules of the section above, made again on the code as it now
+is.
+
+**A read set aside still says which archive answered it (codex-285).** Codex reviewed the
+correction through the real page and found what it had swallowed. A read sent with an
+archive proven and answered for ANOTHER archive is positive word that the daemon serves
+another archive now, and it is what starts the page's archive check when the event socket
+opens on that daemon for the first time (codex-275). The set-aside returned before that was
+looked at. So: archive A's question, Continue pressed, the socket opening for the first
+time on a daemon serving B, Continue and the read that finds out both failing; the
+opening's read, answered for B, was set aside whole, and the page sat on "Try again" bound
+to A, with no identity check and no reload. The committed gate made the check and reloaded.
+
+**Corrected.** A read from before a failed answer is looked at for its archive first, as
+every read is: answered for another archive, it is reported and nothing of it is drawn.
+Only then is its state set aside. A read dropped for its CONNECTION is still dropped whole,
+as before. **Shown** at the gate in both orders (answered after "could not be read", and
+before the read that finds out, where the choices also stay disabled and a press sends
+nothing), and through the real page in its own file
+(`main.recoveryanswerfail.archive.test.ts`): Codex's sequence, ending in one more identity
+read and one reload, with B's session not drawn, no recovery choice on the page, one
+Continue POST and no New. All three were seen to fail a named assertion first. Five more
+reversions (the set-aside put back before the archive is looked at: three; the set-aside
+kept for a failing read only, and for an answering read only: one each), which with the
+sixteen above, made again, is twenty-one.
+
+**The hosted CI and Node (the operator's ruling, 2026-11-27: Node 24).** The hosted run on
+`d7bcf9e5` failed in 20 test files, in code that commit did not touch: the workflow gave
+`actions/setup-node` the app manifest's `engines` range (`>=22`), the runner took the
+newest Node it had, and that had become 26.13.1 where it had been 24.22.3 the day before.
+Node 26 has a `localStorage` of its own, which yields nothing without
+`--localstorage-file`, and vitest 4.1.10 keeps a name Node already has in place of
+jsdom's. The workflow now names `24.x`, and the two manifests' `engines` are
+`^22.13.0 || 24.x`, which is what the locked dependencies admit (Codex, codex-283). A move
+to Node 26 is its own item: the test setup would take both `localStorage` and
+`sessionStorage` from jsdom (Codex reproduced the need for both on Node 22 with Web
+Storage switched on).
