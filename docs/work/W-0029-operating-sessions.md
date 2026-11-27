@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), a third after that commit's own review (`5f48eaa0`), a fourth after the review of that (`3d5c339b`), a fifth after Codex's reviews of all four in the real page (codex-277 to codex-282; `d7bcf9e5`), and one more after that commit's own review and Codex's two reviews of it (codex-284, codex-285; the last two sections; uncommitted when written), and is not at the station: its install has one step of its own, the app closed before it. The controls (slice 3) are not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), a third after that commit's own review (`5f48eaa0`), a fourth after the review of that (`3d5c339b`), a fifth after Codex's reviews of all four in the real page (codex-277 to codex-282; `d7bcf9e5`), and one more after that commit's own review and Codex's two reviews of it (codex-284, codex-285; `b01f5392`).** **Part 5 and part 6's first two slices are at the station since 2026-11-27** (the last section). **The controls (slice 3) are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -6361,3 +6361,41 @@ jsdom's. The workflow now names `24.x`, and the two manifests' `engines` are
 to Node 26 is its own item: the test setup would take both `localStorage` and
 `sessionStorage` from jsdom (Codex reproduced the need for both on Node 22 with Web
 Storage switched on).
+
+### Part 5 and part 6, slices 1 and 2, at the station (2026-11-27; the operator's deploy; uncommitted when written)
+
+With `b01f5392` committed, pushed and green on the hosted CI (run 46010191930, on Node
+24.22.3), the operator asked "Install now?". Claude answered yes and named the steps: the
+app kept closed (ruling 9), nothing on the air, `task deploy:local:dev`, then the app
+opened. The operator ran the deploy and reported: **"deployed"**.
+
+**What was there before, and what is there now.** Checked locally and read-only, with no
+request to the station's daemon.
+- Before: the daemon and the desktop app at `2.0.0~alpha.5.332.ge40a710d`, parts 1 to 4.
+  The desktop app was not running, which is what ruling 9 requires of this install.
+- Now: both at `2.0.0~alpha.5.347.gb01f5392`, installed in one transaction at 16:18 CAT;
+  `rpm -V` of both packages reports no file differing; `smd` active since 16:18:58 CAT with
+  no restart by the service manager.
+- What the fifteen commits between them bring: part 5 (a contact logged while operating
+  joins the open session; the start's wait and the drains), part 6's reads, and the
+  cutover with its corrections: the Session the operator sees is the daemon's. No
+  migration file changed between the two builds.
+
+**What the operator saw**, in two screenshots sent after opening the app (16:19:56 and
+16:21:17 CAT):
+- The workspace opened directly on Operate, with no recovery question: the app had been
+  closed normally and no session with contacts was left open.
+- The session clock at 00:00:05, then 00:00:32, and the Session panel reading
+  **"Session (0)  Started 14:20 UTC"** and **"No QSOs logged this session."** The clock
+  and the start time agree (14:21:17 UTC less 32 s). The panel starts empty, as the
+  cutover's section said it would: contacts logged before the install are in no session.
+
+**Not yet seen at the station:** a contact logged after the install appearing in the
+panel, read back from the daemon; the recovery question on a real leftover session;
+anything of the failed-answer paths, which need a daemon that refuses.
+
+**The way back, as it stands.** The earlier pair of packages is not kept: the deploy
+overwrote `build/private/station-manager-dev.x86_64.rpm` and
+`build/release/station-manager-desktop.x86_64.rpm`, and no file under `build/` carries
+`e40a710d` in its name. It can be built again from that commit. Claude did not suggest a
+copy of the station's data before this install and knows of none taken.
