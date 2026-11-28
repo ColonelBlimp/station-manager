@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), a third after that commit's own review (`5f48eaa0`), a fourth after the review of that (`3d5c339b`), a fifth after Codex's reviews of all four in the real page (codex-277 to codex-282; `d7bcf9e5`), and one more after that commit's own review and Codex's two reviews of it (codex-284, codex-285; `b01f5392`).** **Part 5 and part 6's first two slices are at the station since 2026-11-27** (the last section). **The controls (slice 3) are not built.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** ("Parts 1 to 4 at the station"). **Part 5's acceptance criteria are written (2026-11-24, the last section) and revised after Codex's review of them (codex-255); their three questions are ruled (2026-11-24); Codex's review of the revision is closed with no open finding (codex-257). The recovery screen's sentence (question 3) is committed (`6b84918b`). Part 5's first slice, the logging step in the contact's transaction with the classification, the holder and the event, is built and committed (`3cd6b57d`, 2026-11-25) and, as ruled, not connected in the daemon's ordinary start. Codex's two reviews of it found no fault in the code and four in its tests (codex-259, codex-260), all corrected and committed (`89407ad1`). Its second slice, the admission's wait and the drains, is built (2026-11-25, the last section; uncommitted when written), and with it part 5's criteria are built; it is committed (`301437e3`), with one correction after the hosted CI failed on it (`0e9dcf39`). Part 5 stays unconnected until part 6. Part 6's acceptance criteria are written (2026-11-25, the last section) and revised after Codex's two reviews of them (codex-266, codex-267); their nine questions are ruled (2026-11-25, each as recommended). Part 6's first slice, the daemon's reads and the event's fact, is committed (`5d1ea712`), with a correction after Codex's reviews (`f9d41657`): nothing in the app uses it yet and it changes nothing at the station. The cutover (slice 2) is committed (`13d7c5b6`, 2026-11-26), with its correction after three reviews (`9b8c6260`) a second (`ff5e855c`), a third after that commit's own review (`5f48eaa0`), a fourth after the review of that (`3d5c339b`), a fifth after Codex's reviews of all four in the real page (codex-277 to codex-282; `d7bcf9e5`), and one more after that commit's own review and Codex's two reviews of it (codex-284, codex-285; `b01f5392`).** **Part 5 and part 6's first two slices are at the station since 2026-11-27**. **The controls (slice 3) are built, committed (`d8200176`, `e94ffc3a`, `adcc553a`) and at the station since 2026-11-28** (the last section): parts 1 to 6 are at the station. Parts 7 to 9 are not built. The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -7147,3 +7147,48 @@ end with the list having it: one newest generation (`known`), one test of it (`c
 one writer of whether there is anything to continue (`record`), one statement of whether
 the list on screen is the list (`listIsTheList`), kept apart from whether a control can
 be sent (`continueSendable`). Codex's review of that tree is complete (codex-298).
+
+### Part 6, slice 3 at the station (2026-11-28; the operator's deploy; uncommitted when written)
+
+With the three commits pushed (`d8200176`, `e94ffc3a`, `adcc553a`), the operator asked
+"Okay, so deploy?". Claude answered that it was ready and named the steps (the app closed
+first, `task deploy:local:dev`, the app opened), and one thing to decide: the hosted run on
+`adcc553a` was still in progress, and Claude recommended waiting for it while saying the
+risk of not waiting was small, since that commit had passed the whole local CI. The
+operator chose to deploy ("I will do it...") and reported: **"deployed"**.
+
+**What was there before, and what is there now.** Checked locally and read-only, with no
+request to the station's daemon.
+- Before (read at 13:01 CAT): the daemon and the desktop app at
+  `2.0.0~alpha.5.347.gb01f5392`.
+- Now: both at `2.0.0~alpha.5.351.gadcc553a`, installed in one transaction at 13:02:27
+  CAT; `rpm -V` of both packages exits 0, no file differing; `smd` active since 13:02:28
+  CAT, running, with no restart by the service manager.
+- Whether the app was closed for the install (ruling 9) is not something Claude checked:
+  it was a step Claude named, and the operator did not say.
+- What the four commits between them bring: one is the record of the last install; the
+  other three are slice 3. "Continue…" and "New session" in the Session panel, the list of
+  earlier sessions as a dialog, what the panel says when a control is refused or its
+  outcome is not known, and Band Activity's reworded message. Page and desktop program
+  only: nothing of the daemon's code changed, and no migration file.
+
+**The hosted CI at the time of the install.** The run on `adcc553a` (46136603558) had not
+finished. The run on `e94ffc3a` had passed; `adcc553a` had passed the whole local CI
+(exit 0) and its clean-room review had no finding. The hosted verdict on `adcc553a` is to
+be read from its log and added to the record when it is in.
+
+**What the operator saw.** Nothing has been reported yet beyond "deployed".
+
+**Not yet seen at the station:** the workspace opening after this install; a contact
+logged after an install appearing in the panel (open since 2026-11-27); "New session"
+emptying the panel and restarting the clock; "Continue…" listing the session just left
+and bringing its contacts back; the recovery question on a real leftover session; and
+any of the refused or failed paths, which need a daemon that refuses.
+
+**The way back, as it stands.** The earlier pair of packages is not kept: the deploy
+overwrote `build/private/station-manager-dev.x86_64.rpm` and
+`build/release/station-manager-desktop.x86_64.rpm`, and no file under `build/` carries
+`b01f5392` in its name. It can be built again from that commit; since no migration and
+nothing of the daemon changed, going back would change only the page and the desktop
+program. Before this install Claude said that no copy of the station's data was known
+and offered to propose steps for one; none was asked for, and Claude knows of none taken.
