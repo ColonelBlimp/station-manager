@@ -19,6 +19,7 @@
         "check:c4a": "SM_DESKTOP_SCENARIO=c4a electron .",
         "check:recovery": "SM_DESKTOP_SCENARIO=recovery electron .",
         "check:close": "SM_DESKTOP_SCENARIO=close electron .",
+        "check:controls": "SM_DESKTOP_SCENARIO=controls electron .",
         "test:unit": "node --test test/discovery.test.mjs test/daemon.test.mjs test/smd-process.test.mjs test/mode.test.mjs test/imports.test.mjs test/trace.test.mjs test/waiting.test.mjs test/credential.test.mjs test/admission.test.mjs test/runtime-cache.test.mjs test/closing.test.mjs test/closing-question.test.mjs test/hardening.test.mjs",
         "lint": "eslint .",
         "format:check": "prettier --check .",

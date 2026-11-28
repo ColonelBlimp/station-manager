@@ -356,6 +356,9 @@ jobs:
           # W-0027 A3: the app's close, against that same binary, in a temporary
           # working directory with synthetic data. FT8 is off there: nothing is keyed.
           xvfb-run -a npm run check:close
+          # W-0029 part 6: the Session panel's New and Continue, against that same
+          # binary, in a temporary working directory with synthetic data. FT8 is off.
+          xvfb-run -a npm run check:controls
       # W-0027 C2c: the tools against that same binary, in a temporary
       # working directory with the rig, FT8 and evidence capture disabled. The client and
       # the Cabrillo reader only read; the tune probe is not executed here.

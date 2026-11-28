@@ -16,17 +16,22 @@
     // (demand-driven capture). Rows without a uuid (pre-upgrade sessions)
     // render as plain text.
     //
-    // The controls (W-0029 part 6, slice 3; criteria E, F): "Continue…" opens
-    // the list of earlier sessions, with the ruled sentence beside it. It is
-    // offered only where it can act (a session open, or none) and only when
-    // there is something to continue or the list could not be read. What a
+    // The controls (W-0029 part 6, slice 3; criteria E, F), with the ruled
+    // sentence beside them, offered only where they can act (a session open,
+    // or none). "New session" closes the session and opens another; it asks
+    // nothing first (the operator's ruling 2, 2026-11-25: the session it
+    // closes is in Continue's list). It is sent by the recovery gate at the
+    // generation of the state shown, and the panel then draws whatever state
+    // the daemon returns: it works out nothing of its own. "Continue…" opens
+    // the list of earlier sessions, and is offered only when there is
+    // something to continue or the list could not be read. What a
     // control that was not applied came to is said on a line here, in the
     // words given. And when the page could not find out what a control did
     // (session.control "unknown"; the operator's ruling 1, 2026-11-27) the
     // panel says so, says the rows are as last read, and offers "Try again",
     // which reads the state once and sends no control.
     import { session } from './session.svelte';
-    import { recovery, readAfterUnknown } from '../recovery.svelte';
+    import { recovery, readAfterUnknown, sendSessionControl } from '../recovery.svelte';
     import { continueList, openContinue, closeContinue } from './continueList.svelte';
     import ContinueDialog from './ContinueDialog.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
@@ -164,16 +169,26 @@
         </div>
     </div>
 
-    {#if continueOffered}
+    {#if controlsOffered}
         <div class="mt-2 flex items-center gap-x-3" data-testid="session-controls">
             <button
                 class="btn text-xs"
-                title="Continue an earlier session"
+                title="Close this session and start a new one"
                 disabled={session.control !== ''}
-                onclick={openContinue}
+                onclick={() => void sendSessionControl('new', recovery.generation, '')}
             >
-                Continue…
+                New session
             </button>
+            {#if continueOffered}
+                <button
+                    class="btn text-xs"
+                    title="Continue an earlier session"
+                    disabled={session.control !== ''}
+                    onclick={openContinue}
+                >
+                    Continue…
+                </button>
+            {/if}
             <span class="text-xs text-muted">Contacts stay in the session they were logged in.</span
             >
         </div>

@@ -158,6 +158,7 @@ npm run check:c1d-shell                 # C1d wiring: discovery, pin and waiting
 SM_DESKTOP_SMD=../build/bin/smd npm run check:c1d   # C1d acceptance against a real, already-built smd
 npm run check:c2b                       # C2b: the operating credential, TLS fixtures
 SM_DESKTOP_SMD=../build/bin/smd npm run check:close # A3: the app's close against a real, already-built smd
+SM_DESKTOP_SMD=../build/bin/smd npm run check:controls # W-0029: the Session panel's New and Continue, same
 npm run test:unit                       # discovery, connection, mode, trace and page logic, no Electron
 npm run lint && npm run format:check
 ```

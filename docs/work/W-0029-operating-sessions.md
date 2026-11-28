@@ -6929,6 +6929,56 @@ Three reversions, each failing a named expectation: the rule removed (the worksp
 and the question's), and its opposite (a read sent after the failure no longer settling
 it, which the earlier tests refuse).
 
+### Part 6, slice 3: New, and the controls in the real app (built 2026-11-28; uncommitted when written)
+
+The second of the two commits of ruling 4. Page and desktop scenario; the daemon is
+unchanged.
+
+**What was built.**
+1. *"New session" in the panel*, before "Continue…", with the ruled sentence beside
+   whichever of the two is offered. It is offered with a session open and with none
+   (where it opens one), and not while the archive is being switched. One press sends
+   New once, at the generation of the state shown, with no question first (ruling 2 of
+   2026-11-25). It goes by the gate's one path, built with Continue: one control out at a
+   time for the whole page, the stale words, the failure rules, and the workspace kept
+   when the outcome is not known. The panel draws the state returned and works out
+   nothing of its own.
+2. *The desktop scenario* (`desktop/test/scenario-controls.mjs`, `npm run
+   check:controls`, in the local and the hosted CI): the real app against a real `smd`
+   in a temporary directory with synthetic data, FT8 off. A contact is logged; "New
+   session" is pressed in the page; `smd` holds another session, empty, and the panel
+   shows that one; the session closed is in Continue's list with its one contact; the
+   line is chosen; `smd` holds the first session again in a new sitting and the panel
+   shows its contact; the empty session left was discarded; a second contact joins the
+   continued session; and it is still so after a reload. The clock is let run four
+   seconds before each control and must read less after it, since a sitting a second old
+   looks the same before a control and after.
+   **F9, which my first version of the scenario left out (Codex, codex-291):** the
+   default logbook is then changed to a second logbook and back, each change asked of
+   `smd` by its own route and applied at the restart `smd` asks for (the scenario starts
+   it again, as the service manager does; `smd` exits with its restart code both times).
+   After the first, `smd` holds a session of the second logbook; after the second, a new
+   session of the first, with the first session closed by the change and kept. That
+   session is chosen in the panel; `smd` holds it again; a third contact joins it; and it
+   is still open. Ten checks. Its control
+   (`SM_CONTROLS_CONTROL=skip-new`) does not press New, and the run fails at the wait
+   for another session, as it must.
+3. *Documents:* the HTTP reference says what sends `new` from the workspace; the manual's
+   outline has the line; the capsule.
+
+**How it was shown.** The panel's tests for New were seen to fail before the button was
+added. Through the real `main.ts` (`main.sessionnew*.test.ts`, four): New sent once with
+only the generation shown, the panel empty with a count of 0, the clock and the start
+from the state returned, and the session closed offered; an answer lost with the New
+applied, and no second New; a stale refusal; and, on the FT8 view starting with no
+session open, New opening one with nothing sent to FT8 and the same FT8 event stream,
+then a refusal in the daemon's words. Those four were written after the button and
+passed at once; seven reversions show them.
+
+**A reading for the operator.** With New in the row, the sentence "Contacts stay in the
+session they were logged in." shows whenever a control is offered, so it is beside New
+alone when there is nothing to continue. The ruling placed it beside Continue.
+
 ### Part 6, slice 3: four more rulings, and the commits held for Codex's last review (2026-11-28)
 
 The operator, 2026-11-28, on the five items at the end of the exchange's claude-635:

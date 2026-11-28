@@ -714,7 +714,11 @@ describe('SessionPanel controls', () => {
         render(SessionPanel);
         await shown(state, available);
         expect(continueButton()).toBeNull();
-        expect(screen.queryByText(SENTENCE)).toBeNull();
+        // The sentence stands beside whichever controls are offered: with a
+        // session open that is New, whatever the list says (see
+        // SessionPanel.new.svelte.test.ts); while the archive is being
+        // switched there is no control and no sentence.
+        expect(screen.queryByText(SENTENCE) === null).toBe(state === 'archive_switching');
     });
 
     it('pressing it opens the list, which is read then', async () => {

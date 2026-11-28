@@ -184,6 +184,14 @@ if (!app.requestSingleInstanceLock()) {
                 app.exit(ok ? 0 : 1);
                 return;
             }
+            // W-0029 part 6: the Session panel's New and Continue, against a real smd
+            // (SM_DESKTOP_SMD), in a temporary working directory with synthetic data and free
+            // ports; never the station.
+            if (scenario === 'controls') {
+                const ok = await (await import('../test/scenario-controls.mjs')).runControls();
+                app.exit(ok ? 0 : 1);
+                return;
+            }
             // W-0027 A3: the app's close, against a real smd (SM_DESKTOP_SMD), in a temporary
             // working directory with synthetic data and free ports; never the station. It
             // hands each launch to the handlers above as the app's own, and for its last step
