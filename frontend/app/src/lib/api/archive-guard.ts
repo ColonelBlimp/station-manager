@@ -40,6 +40,15 @@ export function boundArchive(): string | null {
     return bound;
 }
 
+/**
+ * Whether a guarded request would be sent now: an archive is proven, and the
+ * binding is not being re-checked. guardedFetch refuses locally otherwise, so
+ * a control that cannot be sent should not be offered as one that can.
+ */
+export function archiveSendable(): boolean {
+    return bound !== null && !unproven();
+}
+
 /** True while the binding is being re-checked or a switch is unresolved. */
 export function setArchiveBindingGate(isUnproven: () => boolean): void {
     unproven = isUnproven;

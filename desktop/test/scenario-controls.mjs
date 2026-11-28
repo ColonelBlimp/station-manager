@@ -53,8 +53,6 @@ const press = (label) =>
     `(() => { const b = [...document.querySelectorAll('button')].find((x) =>
         x.textContent.trim() === ${JSON.stringify(label)} || x.getAttribute('title') === ${JSON.stringify(label)});
         if (!b || b.disabled) return false; b.click(); return true; })()`;
-const hasButton = (label) =>
-    `[...document.querySelectorAll('button')].some((x) => x.textContent.trim() === ${JSON.stringify(label)} && !x.disabled)`;
 // What the Session panel shows: its heading ("Session (1) Started 09:15 UTC"), the callsigns
 // of its rows, what it says when it has none, the header's clock, and what it says of a
 // control. '' and [] while the panel is not on the page.
@@ -228,7 +226,9 @@ export async function runControls() {
 
         // 2. New.
         const ranBeforeNew = await clockAtLeast(win, RUN_FOR);
-        const pressedNew = skipNew ? true : await js(win, press('New session'));
+        const pressedNew = skipNew
+            ? true
+            : await until(() => js(win, press('New session')), 'New to be offered', 10000);
         const afterNew = await until(
             () => js(win, SESSION).then((s) => (s.session && s.session.id !== firstId ? s : null)),
             'smd to hold another session after New'
@@ -271,8 +271,10 @@ export async function runControls() {
         );
 
         // 3. Continue is offered, and its list is smd's.
-        await until(() => js(win, hasButton('Continue…')), 'Continue to be offered', 10000);
-        await js(win, press('Continue…'));
+        // Found and pressed in one call to the page: between two calls the button can go
+        // (it is offered only while there is something to continue), and a press that
+        // found nothing would leave the scenario waiting for a dialog it never opened.
+        await until(() => js(win, press('Continue…')), 'Continue to be offered and pressed', 10000);
         const lines = await until(
             () => js(win, LINES).then((l) => (l.length > 0 ? l : null)),
             "the lines of Continue's list",
@@ -286,7 +288,14 @@ export async function runControls() {
 
         // 4. The line is chosen.
         const ranBeforeContinue = await clockAtLeast(win, RUN_FOR);
-        const chose = await js(win, CHOOSE_FIRST_LINE);
+        // A line is shown before it can be chosen (while the list is being read again, or
+        // is of another generation than the state the page shows): the scenario presses it
+        // as the operator would, once it can be pressed (the clean-room review of e94ffc3a).
+        const chose = await until(
+            () => js(win, CHOOSE_FIRST_LINE),
+            'the line to be one that can be chosen',
+            15000
+        );
         const continued = await until(
             () =>
                 js(win, SESSION).then((s) =>
@@ -415,14 +424,23 @@ export async function runControls() {
         await until(() => js(win, press('Session — show')), 'the Session tile', 5000).catch(
             () => false // it may already be showing
         );
-        await until(() => js(win, hasButton('Continue…')), 'Continue to be offered again', 10000);
-        await js(win, press('Continue…'));
+        await until(
+            () => js(win, press('Continue…')),
+            'Continue to be offered again and pressed',
+            15000
+        );
         await until(
             () => js(win, LINES).then((l) => (l.length > 0 ? l : null)),
             "the lines of Continue's list after the default came back",
             10000
         );
-        const choseFirst = await js(win, chooseLineWith('· 2 contacts'));
+        // After two restarts the page has reconnected and read again; the line may be
+        // shown a moment before it can be chosen.
+        const choseFirst = await until(
+            () => js(win, chooseLineWith('· 2 contacts')),
+            "the first session's line to be one that can be chosen",
+            20000
+        );
         const again = await until(
             () => js(win, SESSION).then((x) => (x.session?.id === firstId ? x : null)),
             'smd to hold the first session again, after the default went away and came back'

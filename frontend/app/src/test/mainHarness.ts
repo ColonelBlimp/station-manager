@@ -54,6 +54,8 @@ export interface Daemon {
     config: unknown;
     /** When set, GET /v1/config answers only once this settles. */
     configHold?: Promise<void>;
+    /** When set, GET /v1/version (the identity read) answers only once this settles. */
+    versionHold?: Promise<void>;
     /** Answers to other requests, by "METHOD url"; unlisted ones 404. An
      *  answer with `hold` is sent only once that promise settles. A list is a
      *  sequence: each request takes the next answer, and the last one stays. */
@@ -87,6 +89,11 @@ function json(body: unknown, status = 200): Response {
     });
 }
 
+// An answer given at once, or only once its hold settles.
+function held(hold: Promise<void> | undefined, body: unknown): Promise<Response> {
+    return hold ? hold.then(() => json(body)) : Promise.resolve(json(body));
+}
+
 export function installDaemon(d: Daemon): void {
     vi.stubGlobal('EventSource', FakeEventSource);
     vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -105,11 +112,8 @@ export function installDaemon(d: Daemon): void {
                 defaultLogbook: h.get('X-SM-Default-Logbook'),
                 body: typeof init?.body === 'string' ? init.body : null,
             });
-            if (method === 'GET' && url === '/v1/version') return Promise.resolve(json(d.version));
-            if (method === 'GET' && url === '/v1/config') {
-                if (d.configHold) return d.configHold.then(() => json(d.config));
-                return Promise.resolve(json(d.config));
-            }
+            if (method === 'GET' && url === '/v1/version') return held(d.versionHold, d.version);
+            if (method === 'GET' && url === '/v1/config') return held(d.configHold, d.config);
             const listed = d.routes[`${method} ${url.split('?')[0]}`];
             const r = Array.isArray(listed)
                 ? listed.length > 1

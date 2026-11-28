@@ -119,7 +119,7 @@ import {
     continueStreamReopened,
     setContinuePorts,
 } from './lib/operate/continueList.svelte';
-import { boundArchive } from './lib/api/archive-guard';
+import { archiveSendable, boundArchive } from './lib/api/archive-guard';
 import { setStationSaved } from './lib/config/station.svelte';
 import { setFt8PrefsSaved } from './lib/config/ft8.svelte';
 import { router, setModeChangeHook, setFtEnabled } from './lib/router.svelte';
@@ -784,6 +784,9 @@ setContinuePorts({
     readState: sessionMayHaveChanged,
     send: (generation, sessionId) => sendSessionControl('continue', generation, sessionId),
     otherArchive: (id) => fileUnderArchive(id, 'closed sessions', () => {}),
+    // No line of the list can be pressed while the page's archive is being
+    // checked: the control would be refused before it was sent.
+    sendable: archiveSendable,
 });
 setSessionPorts({
     readRows: fetchSessionMembers,

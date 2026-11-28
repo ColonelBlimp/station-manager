@@ -19,6 +19,7 @@ import {
     type ClosedSessionLike,
 } from './continueList.svelte';
 import { session, _resetSessionForTests } from './session.svelte';
+import { archivesState } from '../config/archives.svelte';
 
 const HOME = '01a16a00-0000-7000-8000-000000000001';
 const id = (n: number): string => `0190${String(n).padStart(4, '0')}-0000-7000-8000-000000000000`;
@@ -69,6 +70,9 @@ beforeEach(async () => {
             sent.push([generation, sessionId]);
             return Promise.resolve('applied');
         },
+        // As main.ts wires it: no guarded request can be sent while the
+        // page's archive is being checked.
+        sendable: () => !archivesState.verifying && !archivesState.switchUnresolved,
     });
     continueStateDrawn({ archiveId: HOME, generation: 4, state: 'open' });
     await flush();
@@ -160,6 +164,28 @@ describe('ContinueDialog', () => {
         expect(screen.getByText('There is no earlier session to continue.')).toBeInTheDocument();
     });
 
+    // codex-295: an empty list that is known to be an old one is not "nothing
+    // to continue". The dialog says the session has changed, and offers to read.
+    it('an empty list known to be older than the session is not said to be nothing to continue', async () => {
+        held = [];
+        render(ContinueDialog);
+        openContinue();
+        await flush();
+        expect(screen.getByText('There is no earlier session to continue.')).toBeInTheDocument();
+
+        // The state moves to another generation, and the list read for it fails
+        // to be current: the daemon answers from the generation before.
+        scripted.push(page(0, 20), page(0, 20), page(0, 20));
+        continueStateDrawn({ archiveId: HOME, generation: 6, state: 'open' });
+        await flush();
+
+        expect(screen.queryByText('There is no earlier session to continue.')).toBeNull();
+        expect(
+            screen.getByText('The session has changed since this list was read.')
+        ).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Read it again' })).toBeEnabled();
+    });
+
     it('"Show more" is offered only while there are more, and adds them', async () => {
         held = Array.from({ length: 25 }, (_, i) => closed(25 - i));
         render(ContinueDialog);
@@ -202,6 +228,33 @@ describe('ContinueDialog', () => {
         session.control = '';
         flushSync();
         for (const b of screen.getAllByRole('button', { name: /UTC/ })) expect(b).toBeEnabled();
+    });
+
+    // codex-297: while the page's archive is being checked a guarded request
+    // is refused before it is sent, so no line may be pressable; and they come
+    // back by themselves when the check has confirmed the archive.
+    it('no line can be pressed while the archive is being checked, and all can again once it is confirmed', async () => {
+        render(ContinueDialog);
+        openContinue();
+        await flush();
+        try {
+            archivesState.verifying = true;
+            flushSync();
+            for (const b of screen.getAllByRole('button', { name: /UTC/ })) {
+                expect(b).toBeDisabled();
+            }
+            await fireEvent.click(screen.getAllByRole('button', { name: /UTC/ })[0]);
+            expect(sent).toEqual([]);
+            expect(continueList.open).toBe(true);
+
+            archivesState.verifying = false;
+            flushSync();
+            for (const b of screen.getAllByRole('button', { name: /UTC/ })) {
+                expect(b).toBeEnabled();
+            }
+        } finally {
+            archivesState.verifying = false;
+        }
     });
 
     it('no line can be pressed once the session has moved on from the list, and the dialog says so', async () => {

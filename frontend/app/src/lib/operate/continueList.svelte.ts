@@ -44,6 +44,19 @@
         read. A list of a NEWER generation is word that the session has moved:
         the state is asked for. A state of another generation drawn while the
         dialog is open is followed by reading the list again;
+      - the page hears of the list's generation from three places: the state
+        drawn, the one-line read, and the dialog's read. The NEWEST generation
+        heard of, from any of them, is kept (`known`), and no read that fails
+        takes it away. Nothing of an older generation is offered after that:
+        an older answer is not recorded as whether there is anything to
+        continue, an older list's lines cannot be chosen, and its being empty
+        is not "no earlier session". The dialog then says the session has
+        changed and offers to read again (codex-295). A read need not finish
+        to establish that: each page that answers for this archive is heard
+        of as it arrives, and a further page REFUSED as stale says the list
+        on screen has changed though it names no generation. From either,
+        the lines on screen stay and cannot be chosen until a list that is
+        current has been read, whatever fails meanwhile (codex-296);
       - a choice carries what the operator saw: the line's session and the
         LIST's generation, and it is sent only while the page is still bound
         to the list's archive. Choosing closes the dialog; whatever the
@@ -89,6 +102,10 @@ export interface ContinuePorts {
     send: (generation: number, sessionId: string) => Promise<ContinueEnd>;
     /** Told when a read is answered for another archive than the page is bound to. */
     otherArchive?: (archiveId: string) => void;
+    /** Whether a guarded request can be sent now: false while the page's
+     *  archive is being checked, when a control would be refused before it was
+     *  sent. Absent: always. */
+    sendable?: () => boolean;
 }
 
 /** The state the workspace shows, as far as this module needs it. */
@@ -139,10 +156,21 @@ const KEPT_CHANGING = 'The list kept changing while it was being read.';
 let ports: ContinuePorts | null = null;
 // The state the workspace shows, while it is one the controls are offered in.
 let shown: { archiveId: string; generation: number } | null = null;
+// The newest generation of this archive's record that the page has heard of,
+// from a state drawn or from either read of the list. It only ever rises, and a
+// read that fails does not lower or clear it.
+let known: { archiveId: string; generation: number } | null = null;
 // What the answer to "is there anything to continue" was read at.
 let availableAt: { archiveId: string; generation: number } | null = null;
 let availableOut = false;
 let availableAgain = false;
+// Counts the answers recorded, by either read. The one-line read notes it when
+// it is sent: a failure of that read replaces nothing recorded since.
+let recorded = 0;
+// The generation known for which the question was asked again because an
+// answer was older than it: once for a generation, so that a daemon answering
+// behind its own state is not asked in a loop.
+let askedAgainFor: number | null = null;
 // Counts the times the question was dropped (the state left the workspace): an
 // answer to a read sent before is not drawn.
 let availableEpoch = 0;
@@ -156,6 +184,11 @@ let again = false;
 // A reading again failed with lines on screen: they may be out of date, and
 // only a reading that replaces them makes them good.
 let outOfDate = false;
+// The list on screen is known not to be the list any more, by something that
+// names no generation to compare it with: the daemon refused a further page of
+// it as stale, or answered for another archive. No line of it can be chosen
+// until a list is read that replaces it.
+let superseded = false;
 // The generation the state was last asked for, so that it is asked once.
 let askedStateFor: number | null = null;
 
@@ -169,11 +202,58 @@ const same = (
     b: { archiveId: string; generation: number }
 ): boolean => a.archiveId === b.archiveId && a.generation === b.generation;
 
+// A further page asked for at this generation was refused as stale. If the
+// list on screen is of that generation, it is not the list any more.
+function cursorRefused(generation: number): void {
+    if (list !== null && list.generation === generation) superseded = true;
+}
+
+// The daemon answered for another archive than the list on screen is of (or
+// the page is no longer bound to that one): the list on screen is not a list
+// that daemon would act on.
+function otherArchiveAnswered(): void {
+    if (list !== null) superseded = true;
+}
+
+// Whether an answer is of the newest generation heard of for its archive.
+function current(at: { archiveId: string; generation: number }): boolean {
+    return known === null || known.archiveId !== at.archiveId || at.generation >= known.generation;
+}
+
+// Note a generation heard of: the newest for its archive is kept.
+function hear(at: { archiveId: string; generation: number }): void {
+    if (known !== null && known.archiveId === at.archiveId && at.generation <= known.generation) {
+        return;
+    }
+    known = { ...at };
+}
+
+/**
+ * Whether a control could be sent at all now. While the page's archive is being
+ * checked it could not: a line pressed then would close the dialog and send
+ * nothing, so no line is pressable and the dialog stays (codex-297). The
+ * dialog reads this reactively (it follows the check's own state), so the
+ * lines come back by themselves when the archive is confirmed.
+ */
+export function continueSendable(): boolean {
+    return ports?.sendable?.() !== false;
+}
+
+// Whether the list on screen is one a line may be chosen from: of the state
+// shown, of the newest generation heard of, not superseded, and of the archive
+// the page is bound to. This is about the LIST, and it is what `held` says
+// "moved" of. Whether a control can be sent at this moment is another matter
+// (continueSendable), and passes by itself.
+function listIsTheList(): boolean {
+    if (ports === null || list === null || shown === null) return false;
+    if (!same(list, shown) || !current(list) || superseded) return false;
+    return ports.archive() === list.archiveId;
+}
+
 /** Whether a line may be chosen at this moment. */
 export function continueChoosable(): boolean {
-    if (ports === null || !continueList.open || continueList.reading) return false;
-    if (list === null || shown === null || !same(list, shown)) return false;
-    return ports.archive() === list.archiveId;
+    if (!continueList.open || continueList.reading) return false;
+    return continueSendable() && listIsTheList();
 }
 
 // mark says why no line can be chosen, from what is known now. It is called
@@ -181,7 +261,7 @@ export function continueChoosable(): boolean {
 function mark(): void {
     if (!continueList.open) continueList.held = '';
     else if (continueList.reading) continueList.held = 'reading';
-    else if (list !== null && !continueChoosable()) continueList.held = 'moved';
+    else if (list !== null && !listIsTheList()) continueList.held = 'moved';
     else continueList.held = '';
 }
 
@@ -222,22 +302,80 @@ function askAvailable(): void {
     void readAvailable(ports);
 }
 
+// Whether there is anything to continue is answered by two reads, the one-line
+// read and the dialog's own, and they are not ordered by when they return (the
+// clean-room review of d8200176; codex-294). Both record their answer here, by
+// one rule: an answer of an OLDER generation than the newest heard of is not
+// recorded (codex-295: whoever heard of it, and whether or not a read has
+// failed since). It says nothing of the list as it now is. It reports whether
+// the answer was recorded, and why not.
+function record(at: { archiveId: string; generation: number }, some: boolean): '' | 'older' {
+    if (shown === null || !current(at)) return 'older';
+    continueList.available = some ? 'some' : 'none';
+    availableAt = { ...at };
+    recorded++;
+    return '';
+}
+
+// Draw the one-line read's answer. A read that FAILED says the list could not
+// be read, which offers "Continue…" so that the operator can open the dialog
+// and try again; but not over an answer recorded since this read was sent (the
+// dialog may have read the list meanwhile, and found it empty): a failure
+// carries no generation, so what it may replace is decided by when it was sent
+// (codex-294). An answer older than the state shown, with nothing current
+// recorded, is followed by asking again, once for that generation.
+function drawAvailable(
+    p: ContinuePorts,
+    out: ClosedListReadLike,
+    sentFor: string | null,
+    recordedWhenSent: number
+): void {
+    if (shown === null) return;
+    if (out.kind !== 'ok') {
+        if (recorded !== recordedWhenSent) return;
+        continueList.available = 'unreadable';
+        availableAt = null;
+        return;
+    }
+    if (!ofThisArchive(p, out.archiveId, sentFor)) {
+        // Answered for another archive than the one the read was sent for.
+        // It is reported (the page's archive check starts), and it is no
+        // answer: the list could not be read, which leaves the operator a way
+        // to try again once the page's archive is confirmed, where "not yet
+        // known" would offer nothing and ask nothing (codex-297). As for a
+        // failure, not over an answer recorded since this read was sent.
+        if (sentFor !== null && out.archiveId !== sentFor && recorded === recordedWhenSent) {
+            continueList.available = 'unreadable';
+            availableAt = null;
+        }
+        return;
+    }
+    const at = { archiveId: out.archiveId, generation: out.generation };
+    hear(at);
+    if (record(at, out.sessions.length > 0) === '') {
+        ifNewerAskForTheState(p, out.generation);
+        // If that was a newer generation than the list in the dialog, the
+        // list is not offered any more (mark). It is read again when the
+        // state asked for is drawn, or when the operator asks.
+        mark();
+        return;
+    }
+    const newest = known?.generation ?? shown.generation;
+    const nothingCurrent = availableAt === null || availableAt.generation < newest;
+    if (nothingCurrent && askedAgainFor !== newest) {
+        askedAgainFor = newest;
+        availableAgain = true;
+    }
+}
+
 async function readAvailable(p: ContinuePorts): Promise<void> {
     availableOut = true;
     const epoch = availableEpoch;
     const sentFor = p.archive();
+    const recordedWhenSent = recorded;
     const out = await read(p, 1);
     availableOut = false;
-    if (epoch === availableEpoch && shown !== null) {
-        if (out.kind !== 'ok') {
-            continueList.available = 'unreadable';
-            availableAt = null;
-        } else if (ofThisArchive(p, out.archiveId, sentFor)) {
-            continueList.available = out.sessions.length > 0 ? 'some' : 'none';
-            availableAt = { archiveId: out.archiveId, generation: out.generation };
-            ifNewerAskForTheState(p, out.generation);
-        }
-    }
+    if (epoch === availableEpoch) drawAvailable(p, out, sentFor, recordedWhenSent);
     if (availableAgain) {
         availableAgain = false;
         askAvailable();
@@ -261,6 +399,7 @@ export function continueStateDrawn(state: ContinueStateLike): void {
         return;
     }
     const now = { archiveId: state.archiveId, generation: state.generation };
+    hear(now);
     const moved = shown === null || !same(shown, now);
     shown = now;
     if (availableAt === null || !same(availableAt, now)) askAvailable();
@@ -320,11 +459,20 @@ async function pass(p: ContinuePorts, want: number, mine: number): Promise<Pass>
                 : undefined;
         const out = await read(p, Math.min(want - lines.length, MOST), after);
         if (mine !== run) return { kind: 'given-up' };
-        if (out.kind === 'stale') return { kind: 'stale' };
+        if (out.kind === 'stale') {
+            if (generation !== null) cursorRefused(generation);
+            return { kind: 'stale' };
+        }
         if (out.kind === 'error') return { kind: 'failed', message: out.message };
         if (!ofThisArchive(p, out.archiveId, sentFor)) {
+            otherArchiveAnswered();
             return { kind: 'failed', message: OTHER_ARCHIVE };
         }
+        // Heard of as it arrives: a page is word of the generation whether
+        // or not the pages after it are ever read. If it is newer than the
+        // state shown, the state is asked for.
+        hear({ archiveId: out.archiveId, generation: out.generation });
+        ifNewerAskForTheState(p, out.generation);
         if (generation !== null && out.generation !== generation) return { kind: 'stale' };
         generation = out.generation;
         lines.push(...out.sessions);
@@ -343,19 +491,25 @@ async function readList(p: ContinuePorts, want: number): Promise<void> {
     for (let n = 0; n <= RESTARTS && got.kind === 'stale'; n++) got = await pass(p, want, mine);
     if (got.kind === 'given-up' || mine !== run) return;
     continueList.reading = false;
-    if (got.kind === 'read') {
-        const of = p.archive();
+    const of = p.archive();
+    if (got.kind === 'read' && of !== null) {
+        const at = { archiveId: of, generation: got.generation };
+        hear(at);
         continueList.lines = got.lines;
         continueList.more = got.more;
         continueList.error = '';
         outOfDate = false;
-        if (of !== null) {
-            list = { archiveId: of, generation: got.generation };
-            // What the dialog read also says whether there is anything to continue.
-            continueList.available = got.lines.length > 0 ? 'some' : 'none';
-            availableAt = { ...list };
-        }
+        superseded = false;
+        list = at;
+        // What the dialog read also says whether there is anything to
+        // continue, by the same rule as the one-line read: a list of an older
+        // generation than the newest heard of records nothing. Such a list is
+        // on screen all the same, with no line that can be chosen and the
+        // dialog saying the session has changed (mark, continueChoosable).
+        record(at, got.lines.length > 0);
         ifNewerAskForTheState(p, got.generation);
+    } else if (got.kind === 'read') {
+        continueList.error = OTHER_ARCHIVE;
     } else {
         continueList.error = got.kind === 'failed' ? got.message : KEPT_CHANGING;
         outOfDate = continueList.lines.length > 0;
@@ -379,6 +533,7 @@ export function closeContinue(): void {
     again = false;
     list = null;
     outOfDate = false;
+    superseded = false;
     continueList.lines = [];
     continueList.more = false;
     continueList.reading = false;
@@ -390,7 +545,10 @@ export function closeContinue(): void {
 export function showMoreContinue(): void {
     if (ports === null || !continueList.open || continueList.reading) return;
     if (!continueList.more || list === null) return;
-    if (outOfDate) {
+    // Not from a cursor of a list that is known to be out of date, not
+    // current, or not the list any more: the whole of what is shown is read
+    // again, and one page more, so that one press restores it (codex-297).
+    if (outOfDate || superseded || !current(list)) {
         void readList(ports, continueList.lines.length + PAGE);
         return;
     }
@@ -411,15 +569,25 @@ async function readMore(
     const out = await read(p, PAGE, { sessionId: last.id, generation: of.generation });
     if (mine !== run) return;
     continueList.reading = false;
-    if (out.kind === 'stale' || (out.kind === 'ok' && out.generation !== of.generation)) {
+    if (out.kind === 'stale') {
         // Another list than the one shown: read it from its start, as far as
         // the operator has now asked to see.
+        cursorRefused(of.generation);
         await readList(p, continueList.lines.length + PAGE);
         return;
     }
     if (out.kind === 'error') continueList.error = out.message;
-    else if (!ofThisArchive(p, out.archiveId, sentFor)) continueList.error = OTHER_ARCHIVE;
-    else {
+    else if (!ofThisArchive(p, out.archiveId, sentFor)) {
+        otherArchiveAnswered();
+        continueList.error = OTHER_ARCHIVE;
+    } else {
+        hear({ archiveId: out.archiveId, generation: out.generation });
+        ifNewerAskForTheState(p, out.generation);
+        if (out.generation !== of.generation) {
+            // A page of another list: pages of two lists are never joined.
+            await readList(p, continueList.lines.length + PAGE);
+            return;
+        }
         continueList.lines = [...continueList.lines, ...out.sessions];
         continueList.more = out.more;
         continueList.error = '';
@@ -457,11 +625,13 @@ export async function chooseContinue(sessionId: string): Promise<void> {
 export function _resetContinueForTests(): void {
     ports = null;
     shown = null;
+    known = null;
     availableAt = null;
     availableOut = false;
     availableAgain = false;
     availableEpoch++;
     askedStateFor = null;
+    askedAgainFor = null;
     continueList.available = 'unread';
     closeContinue();
 }

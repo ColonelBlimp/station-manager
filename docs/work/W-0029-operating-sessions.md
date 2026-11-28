@@ -6995,3 +6995,155 @@ The operator, 2026-11-28, on the five items at the end of the exchange's claude-
    close." It replaces mine in the build, with a test of the words.
 
 The other words listed above as mine were not objected to and stand.
+
+### Part 6, slice 3: committed and pushed; the two commits' reviews corrected (2026-11-28; uncommitted when written)
+
+On the operator's word ("commit both and push", 2026-11-28, after Codex's review was
+complete, codex-293): `d8200176` "session: Continue an earlier session from the panel"
+and `e94ffc3a` "session: New session from the panel; both controls against a real smd",
+pushed together. Not installed.
+
+Each commit's clean-room review had one finding. Both stand and are corrected here.
+
+1. **A late answer could hide "Continue…"** (review of `d8200176`). Whether there is
+   anything to continue is answered by two reads, the one-line read and the dialog's own,
+   and they are not ordered by when they return. A one-line read of an empty list at one
+   generation, answered late, was drawn over what the dialog had since read at the next
+   generation: the control was not offered, though there was a session to continue, until
+   the next state was read. The one-line read's answer is no longer drawn when it is of
+   an older generation than what is already recorded, or than the state shown; in the
+   second case nothing current is recorded and the question is asked again, once for that
+   generation. My first correction also counted answers by the order they were sent in;
+   its reversion failed no test, because the generation rule already covered the case,
+   and it is taken out. Three reversions prove what remains.
+2. **The scenario pressed a line once, whether or not it could be pressed** (review of
+   `e94ffc3a`). After the two restarts the dialog can show a line a moment before it can
+   be chosen (the list being read again, or of another generation than the state the
+   page shows); the scenario's press then did nothing and the run would have failed on a
+   page that was right. It now presses when the line can be pressed, as the operator
+   would, and the same for the first Continue and for New.
+
+**Hosted CI on `e94ffc3a`:** run 46115468320, completed with success, no step other than
+success; `node: v24.22.3`; the real-daemon scenarios C1d 19, Recovery 9, Close 18 and
+Controls 10 all pass.
+
+**Codex's review of those corrections (codex-294): two more cases of the first, and the
+scenario's openers.** All three stand and are corrected.
+
+- *The dialog's own read can be the older one.* With the dialog open, its read answered
+  an empty list of an older generation after the one-line read had found a session at a
+  newer one: the dialog's read recorded "none" without comparing, and if the dialog was
+  closed while its replacement read was out, the control stayed hidden with nothing
+  reading. Both reads now record their answer through one rule (an answer of an older
+  generation than what is recorded, or than the state shown, is not recorded).
+- *A one-line read that fails could bring the control back.* A failed read says the list
+  could not be read, which offers "Continue…" so that the dialog can be opened and tried
+  again. But it did so over an answer the dialog had read since that read was sent (an
+  empty list): the control came back with nothing to continue and nothing reading. A
+  failure carries no generation, so what it may replace is decided by when it was sent:
+  it replaces nothing recorded since. That is the count by order of sending which I had
+  taken out one round before for want of a test that needed it; this is the test.
+- *The scenario's two presses that open the list* looked for the button in one call to
+  the page and pressed it in another. Found and pressed in one call now, as the other
+  presses are.
+
+Six reversions for the two rules, each failing a named expectation.
+
+**Codex's next review (codex-295): the dialog and the control could disagree, and a failed
+read could let an old answer back in.** Both stand. They are the third and fourth
+sequences found on one fact, so the correction is to the model and not to the sequence.
+
+The page hears of the list's generation from three places: the state drawn, the one-line
+read, and the dialog's read. Until now each comparison was made against something
+narrower (the state shown; the answer last recorded, which a failed read cleared). The
+list now keeps **the newest generation heard of, from any of the three**, and a read that
+fails takes nothing from it. Everything is judged against that one number:
+
+- an older answer is not recorded as whether there is anything to continue, whichever
+  read brought it and whatever has failed since;
+- a line can be chosen only from a list of that generation (and of the state shown, as
+  before): a list the one-line read has shown to be old cannot be chosen from, where
+  before its line could be pressed and was refused as stale;
+- an old list that is EMPTY is not "There is no earlier session to continue.": the dialog
+  says the session has changed and offers to read again, so the control and the dialog
+  can no longer say opposite things.
+
+Two things I had built on the way are taken out, each because a reversion of it failed
+no test: reading the list again by itself when a newer generation is heard of (the state
+that is asked for does that when it is drawn, and the operator can ask), and keeping an
+old list off the screen (it is on screen, unchoosable, with the dialog saying so; one
+check decides, and the list has no second state for "refused").
+
+Six reversions, each failing a named expectation, one for each of the three places a
+generation is heard from among them.
+
+**Codex's next review (codex-296): a reading that never finishes can still show the list
+on screen to be old.** Stands, in both forms, and both are the model's: the list knew of a
+newer generation only when a whole reading had succeeded.
+
+- A further page REFUSED as stale says the list on screen has changed, though it names no
+  generation. That is now kept as a fact about the list on screen (it is superseded),
+  wherever the refusal came: "Show more", or a page inside a reading again.
+- Each page that answers for this archive is heard of as it arrives, not when the last
+  one has. A first page of a newer generation, followed by a page that fails, leaves the
+  old lines on screen, all of them, and known to be old. If it is newer than the state
+  shown, the state is asked for at once.
+
+From either, the lines stay with "Try again", and none can be chosen (where before they
+came back enabled and a press was sent at the old generation and refused) until a list
+that is current has been read.
+
+Going through every place an answer arrives, to ask what each establishes and whether
+that outlives the reading it belongs to, I found one more of the same kind, and a slip of
+this round's own. An answer for ANOTHER archive left the lines on screen choosable (the
+page is still bound to the archive they are of; a press would have been sent and refused
+by the archive guard): the list on screen is now marked as for a refused page. And the
+change above had made "Show more" report such an answer twice; it is reported once.
+
+Ten reversions, each failing a named expectation.
+
+One run of the whole local CI was stopped and thrown away: I had edited a test while it
+was running, which the working rules forbid because the run then proves nothing. It was
+run again on the finished tree.
+
+**Codex's next review (codex-297): what an answer for another archive leaves behind.**
+Three points, all standing.
+
+- *A line could be pressed while the page was checking its archive.* During that check a
+  guarded request is refused before it is sent, so a line pressed then closed the dialog
+  and sent nothing. The list is now told when a control can be sent (`sendable`, wired
+  from the archive guard in `main.ts`): while it cannot, no line is pressable and the
+  dialog stays, and the lines come back by themselves when the archive is confirmed.
+  This is kept apart from whether the list on screen is the list: my first version put
+  the two in one check, and a reading that ended during the archive check left the list
+  marked "the session has changed" for good. The test through the real page found that;
+  a unit test now holds it.
+- *The one-line read answered for another archive left nothing to recover with.* It was
+  reported and otherwise ignored, so whether there was anything to continue stayed "not
+  yet known": no control, no retry, until another event. It is now "could not be read",
+  which offers "Continue…", and opening the dialog reads the list afresh.
+- *"Show more" used the cursor of a list already marked as no longer the list.* The line
+  it brought was joined to lines that stayed unpressable. On such a list "Show more" now
+  reads the whole of what is shown again and one page more, so one press restores it.
+
+Eight reversions, each failing a named expectation, and one more sequence through the real
+`main.ts` (`main.sessioncontinue.checking.test.ts`), with the page's identity read held so
+that the test looks at the page during the check. That test did not at first prove the
+wiring: the line was also unpressable for a moment because the list was being read
+again. It now waits for that reading to end.
+
+`frontend/app/dist/index.html` shows as changed after a build; it is the build's own
+output and is not part of any commit here.
+
+**What the six rounds on the list had in common** (codex-294 to codex-297, and the two
+commit reviews before them). Every finding after the two commits was in one module,
+Continue's list, and each was a fact the page had been told and did not keep in one
+place: the newest generation heard of; a further page refused; an answer for another
+archive; whether a control can be sent at this moment. The recovery gate has had one
+rule that draws every state since part 4, and its findings stopped when it had it. The
+list was built without that discipline, as a set of reads each comparing with whatever
+was nearest, and Codex found the difference one sequence at a time. The corrections above
+end with the list having it: one newest generation (`known`), one test of it (`current`),
+one writer of whether there is anything to continue (`record`), one statement of whether
+the list on screen is the list (`listIsTheList`), kept apart from whether a control can
+be sent (`continueSendable`). Codex's review of that tree is complete (codex-298).

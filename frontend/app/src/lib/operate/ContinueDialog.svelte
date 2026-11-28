@@ -38,13 +38,16 @@
         continueList,
         closeContinue,
         chooseContinue,
+        continueSendable,
         showMoreContinue,
         retryContinue,
     } from './continueList.svelte';
     import { session } from './session.svelte';
     import { formatClosedSession } from '../utils/time';
 
-    const choosable = $derived(continueList.held === '' && session.control === '');
+    const choosable = $derived(
+        continueList.held === '' && session.control === '' && continueSendable()
+    );
 
     let panel: HTMLDivElement | undefined = $state();
 
@@ -168,6 +171,15 @@
                             </p>
                             <button class="btn mt-2 text-xs" onclick={retryContinue}>
                                 Try again
+                            </button>
+                        {:else if continueList.held === 'moved'}
+                            <!-- An empty list that is known to be an old one is not
+                                 "no earlier session" (codex-295). -->
+                            <p class="text-sm text-warning" role="status">
+                                The session has changed since this list was read.
+                            </p>
+                            <button class="btn mt-2 text-xs" onclick={retryContinue}>
+                                Read it again
                             </button>
                         {:else}
                             <p class="text-sm text-muted">
