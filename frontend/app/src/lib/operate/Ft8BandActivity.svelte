@@ -349,11 +349,23 @@
     // (codex 0f08d2b2 P1).
     // The EVIDENCE LEVEL is reported, not folded to a boolean, because the two
     // sources support different claims: "already worked" is reserved for a
-    // session.qsos hit; an engaged-only hit is a started-but-unlogged attempt
-    // (abandoned, or still inside the async-logging window) and saying "worked"
-    // there is false (ADR 0065 fork 4 — VK5GR, dogfood 2026-08-07). Logged is
-    // checked first so the stronger truthful claim wins when both hold. The
-    // duplicate-protection mechanism treats the levels identically.
+    // session.qsos hit; an engaged-only hit is an earlier attempt (abandoned,
+    // still inside the async-logging window, or made before a New) and saying
+    // "worked" there is false (ADR 0065 fork 4 — VK5GR, dogfood 2026-08-07).
+    // Logged is checked first so the stronger truthful claim wins when both
+    // hold. The duplicate-protection mechanism treats the levels identically.
+    //
+    // What the page may SAY from either is narrower than what sets the flag
+    // (W-0029 part 6, the operator's ruling 5, 2026-11-27):
+    //   - nothing, while the Session is behind or a control sent from this
+    //     window is not settled (sessionVouched): the rows on screen may be
+    //     incomplete, changed, or another session's. The flag is still set
+    //     from them: it only ever lets a contact be stored;
+    //   - for an earlier attempt alone, only that there was one. The engaged
+    //     set is kept for the tab and the archive, the FT8 status that fills it
+    //     names no operating session, and a missing row never showed that
+    //     nothing was logged. The message is also shown before the daemon has
+    //     accepted the start, so it says nothing of what happens next.
     type WorkedEvidence = 'logged' | 'engaged' | '';
     function workedEvidence(call: string): WorkedEvidence {
         if (session.qsos.some((q) => q.callsign === call && q.band === rig.band)) {
@@ -404,12 +416,11 @@
         // a full exchange and see no row (codex c2a8bea6 P1).
         const evidence = workedEvidence(call);
         const allowDuplicate = evidence !== '';
-        if (evidence === 'logged') {
+        const sessionVouched = !session.behind && session.control === '';
+        if (sessionVouched && evidence === 'logged') {
             toasts.info(`${call} already worked this session — working again.`);
-        } else if (evidence === 'engaged') {
-            toasts.info(
-                `You started ${call} earlier this session — nothing was logged. Working as new.`
-            );
+        } else if (sessionVouched && evidence === 'engaged') {
+            toasts.info(`Earlier attempt with ${call} on ${rig.band}.`);
         }
         return { offset, opMHz: opHz / 1_000_000, allowDuplicate };
     }

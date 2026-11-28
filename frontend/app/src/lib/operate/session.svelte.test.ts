@@ -16,6 +16,7 @@ import {
     sessionStreamReopened,
     sessionStreamLost,
     sessionMayHaveChanged,
+    sessionControlStands,
     _resetSessionForTests,
     type DrawnSessionState,
     type SessionRowLike,
@@ -935,5 +936,105 @@ describe('rows and state that go on disagreeing', () => {
         await daemon.answer(last, rows(S1, 5, [row('G4A')]));
         expect(calls()).toEqual(['G4A']);
         expect(session.behind).toBe(false);
+    });
+});
+
+// W-0029 part 6, slice 3: a control sent from this window (New, Continue) whose
+// outcome the page has not drawn. The rows on screen may then be of a session
+// that is no longer the open one, so everything that acts on them is held, as
+// it is for any other way of being behind (the operator's rulings 1 and 5,
+// 2026-11-27). The recovery gate says where the control stands.
+describe('a control whose outcome is not drawn holds what acts on the rows', () => {
+    async function shownWithRows(d: Daemon): Promise<void> {
+        sessionStateDrawn(open(S1, 4));
+        await d.answer(1, rows(S1, 4, [row('K1ABC')]));
+        expect(session.behind).toBe(false);
+    }
+
+    it('while it is out the Session is behind, as being read', async () => {
+        const d = new Daemon();
+        d.connect();
+        await shownWithRows(d);
+
+        sessionControlStands('out');
+
+        expect(session.control).toBe('out');
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('reading');
+        expect(session.qsos.map((q) => q.callsign)).toEqual(['K1ABC']); // the rows stay
+    });
+
+    it('when the page could not find out it is behind, as failed, and the rows stay', async () => {
+        const d = new Daemon();
+        d.connect();
+        await shownWithRows(d);
+
+        sessionControlStands('out');
+        sessionControlStands('unknown');
+
+        expect(session.control).toBe('unknown');
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('failed');
+        expect(session.qsos.map((q) => q.callsign)).toEqual(['K1ABC']);
+    });
+
+    it('once the control is settled with the same session shown, nothing is held', async () => {
+        const d = new Daemon();
+        d.connect();
+        await shownWithRows(d);
+        sessionControlStands('out');
+
+        sessionControlStands('');
+
+        expect(session.control).toBe('');
+        expect(session.behind).toBe(false);
+        expect(session.hold).toBe('');
+        expect(d.sent).toHaveLength(1); // and nothing was read for it
+    });
+
+    it("settled by a state of another session: held until that session's rows are drawn", async () => {
+        const d = new Daemon();
+        d.connect();
+        await shownWithRows(d);
+        sessionControlStands('out');
+
+        // New was applied: the gate draws the new session, then says the control is settled.
+        sessionStateDrawn(open(S2, 6));
+        sessionControlStands('');
+        expect(session.qsos).toEqual([]);
+        expect(session.behind).toBe(true);
+        expect(session.hold).toBe('reading');
+
+        await d.answer(2, rows(S2, 6, []));
+        expect(session.behind).toBe(false);
+    });
+
+    it('"Read again" while the outcome is not known asks for the state as well as the rows', async () => {
+        const d = new Daemon();
+        d.connect();
+        await shownWithRows(d);
+        sessionControlStands('unknown');
+        expect(d.stateReads).toBe(0);
+
+        refreshSessionRows();
+        await settle();
+
+        expect(d.stateReads).toBe(1);
+        expect(d.sent).toHaveLength(2);
+        // One read of the state at a time: asking again while it is out sends no second.
+        refreshSessionRows();
+        await settle();
+        expect(d.stateReads).toBe(1);
+    });
+
+    it('with no session shown the standing is still stated, and nothing is "behind"', () => {
+        const d = new Daemon();
+        d.connect();
+        sessionStateDrawn({ archiveId: ARCHIVE, generation: 4, state: 'none', session: null });
+
+        sessionControlStands('unknown');
+
+        expect(session.control).toBe('unknown');
+        expect(session.behind).toBe(false); // there are no rows to be behind
     });
 });

@@ -34,13 +34,20 @@ export interface Sent {
     url: string;
     archive: string | null;
     defaultLogbook: string | null;
+    /** The request's body when it was text (a JSON write); null otherwise. */
+    body: string | null;
 }
 
 export interface Route {
     status: number;
+    /** The answer's body; or a function of the request's URL that gives it,
+     *  for an answer that depends on the query (a page of a list). */
     body: unknown;
     hold?: Promise<void>;
 }
+
+const bodyOf = (r: Route, url: string): unknown =>
+    typeof r.body === 'function' ? (r.body as (url: string) => unknown)(url) : r.body;
 
 export interface Daemon {
     version: unknown;
@@ -96,6 +103,7 @@ export function installDaemon(d: Daemon): void {
                 url,
                 archive: h.get('X-SM-Archive-Id'),
                 defaultLogbook: h.get('X-SM-Default-Logbook'),
+                body: typeof init?.body === 'string' ? init.body : null,
             });
             if (method === 'GET' && url === '/v1/version') return Promise.resolve(json(d.version));
             if (method === 'GET' && url === '/v1/config') {
@@ -108,8 +116,8 @@ export function installDaemon(d: Daemon): void {
                     ? listed.shift()
                     : listed[0]
                 : listed;
-            if (r?.hold) return r.hold.then(() => json(r.body, r.status));
-            if (r) return Promise.resolve(json(r.body, r.status));
+            if (r?.hold) return r.hold.then(() => json(bodyOf(r, url), r.status));
+            if (r) return Promise.resolve(json(bodyOf(r, url), r.status));
             // The session's state, which every load reads before it shows the
             // workspace (W-0029 part 4): an ordinary start unless a test says
             // otherwise in its routes.

@@ -84,6 +84,8 @@ import { draft, clearDraft, setSubmit, submitState, qsoClock } from './qso.svelt
 import { rig, confirmRig, resetCatLink, setCommandSender, setRigCaps } from './rig.svelte';
 import { operate } from './state.svelte';
 import { sessionEdit } from './sessionEdit.svelte';
+import { continueList } from './continueList.svelte';
+import ContinueDialog from './ContinueDialog.svelte';
 import { hideTile, isVisible } from './layout.svelte';
 import type { LogbookQso } from '../api/logbooks';
 
@@ -99,6 +101,7 @@ beforeEach(() => {
     submitState.duplicate = false;
     operate.exportOpen = false;
     sessionEdit.row = null;
+    continueList.open = false;
     logged = [];
     setSubmit((q) => {
         logged.push(q.callsign);
@@ -370,6 +373,70 @@ describe('Phone/CW pile-up keyboard', () => {
         await vi.waitFor(() => expect(logged).toEqual(['G0ABC']));
     });
 
+    // K1c/K2c — Continue's list (W-0029 part 6, slice 3) is a modal over the
+    // same card: the same two keys must not reach the draft under it. The
+    // dialog closes itself on Escape (ContinueDialog.svelte.test.ts).
+    it('K1c: Escape does not clear the draft while the Continue dialog is open', () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+        continueList.open = true;
+
+        key({ key: 'Escape' });
+        expect(draft.callsign).toBe('G0ABC');
+
+        continueList.open = false;
+        key({ key: 'Escape' });
+        expect(draft.callsign).toBe('');
+    });
+
+    it('K2c: Ctrl+Enter does not log the draft while the Continue dialog is open', async () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+        continueList.open = true;
+
+        key({ key: 'Enter', ctrlKey: true });
+        await Promise.resolve();
+        expect(logged).toEqual([]);
+
+        continueList.open = false;
+        key({ key: 'Enter', ctrlKey: true });
+        await vi.waitFor(() => expect(logged).toEqual(['G0ABC']));
+    });
+
+    // K1d — the REAL dialog and the card together, in both orders of mounting
+    // (codex-290). Window listeners run in the order they were added: when the
+    // dialog's ran first it closed the dialog, and the card's, running second,
+    // found no dialog open and cleared the draft. One Escape must close the
+    // dialog and nothing else, whichever was mounted first; the next Escape,
+    // with no dialog, is the card's again.
+    it.each([
+        ['the dialog mounted before the card', true],
+        ['the card mounted before the dialog', false],
+    ])(
+        'K1d: one Escape closes the Continue dialog and leaves the draft (%s)',
+        (_name, dialogFirst) => {
+            const escape = (): void => {
+                document.body.dispatchEvent(
+                    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+                );
+                flushSync();
+            };
+            if (dialogFirst) render(ContinueDialog);
+            render(LoggingCard);
+            if (!dialogFirst) render(ContinueDialog);
+            workableDraft('G0ABC');
+            continueList.open = true;
+            flushSync();
+
+            escape();
+            expect(continueList.open).toBe(false);
+            expect(draft.callsign).toBe('G0ABC');
+
+            escape();
+            expect(draft.callsign).toBe('');
+        }
+    );
+
     // K3 — the pile-up keys are inert under the editor too: Shift+Enter must
     // not stack-and-wipe a draft the operator cannot see being destroyed.
     it('K3: Shift+Enter does not stack while the session editor is open', () => {
@@ -554,6 +621,28 @@ describe('Phone/CW pile-up keyboard', () => {
         expect(sent).toEqual([]);
 
         sessionEdit.row = null;
+        key({ code: 'ArrowUp', key: 'ArrowUp', ctrlKey: true, shiftKey: true });
+        await vi.waitFor(() => expect(sent).toEqual(['set_freq']));
+    });
+
+    it('K4c: rig shortcuts do not drive the rig while the Continue dialog is open', async () => {
+        const sent: string[] = [];
+        setCommandSender((op) => {
+            sent.push(op);
+            return Promise.resolve({ kind: 'accepted' });
+        });
+        setRigCaps({ ops: ['set_freq', 'set_freq_b'], tune: false, rigModes: [] });
+        rig.cat = 'connected';
+        rig.vfoA = 14_255_000;
+        rig.selectedVfo = 'A';
+        render(RigKeys);
+        continueList.open = true;
+
+        key({ code: 'ArrowUp', key: 'ArrowUp', ctrlKey: true, shiftKey: true });
+        await Promise.resolve();
+        expect(sent).toEqual([]);
+
+        continueList.open = false;
         key({ code: 'ArrowUp', key: 'ArrowUp', ctrlKey: true, shiftKey: true });
         await vi.waitFor(() => expect(sent).toEqual(['set_freq']));
     });

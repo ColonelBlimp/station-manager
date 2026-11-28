@@ -9,6 +9,7 @@ import {
     recovery,
     setRecoveryPorts,
     readSessionState,
+    sendSessionControl,
     _resetRecoveryForTests,
     type SessionStateLike,
     type SessionAnswerLike,
@@ -153,5 +154,39 @@ describe('RecoveryCard — the session could not be read', () => {
         expect(
             await screen.findByRole('heading', { name: 'The last session is still open' })
         ).toBeInTheDocument();
+    });
+});
+
+// W-0029 part 6, slice 3 (codex-290): a control pressed in the workspace can be
+// refused as stale with a state that says recovery is pending. The operator is
+// then looking at THIS card, not the panel, and must still be told the choice
+// was not applied.
+describe('RecoveryCard after a control from the workspace was refused as stale', () => {
+    const STALE = 'The session changed before this could be done. Your choice was not applied.';
+
+    it('the question says the choice was not applied, and still says so after the page reads again', async () => {
+        nextRead = { kind: 'ok', state: held };
+        await readSessionState();
+        expect(recovery.status).toBe('clear');
+        const pending = { ...question(3), generation: 7 };
+        answer.mockResolvedValue({ kind: 'stale', state: pending });
+
+        await sendSessionControl('new', held.generation, '');
+        render(RecoveryCard);
+
+        expect(
+            screen.getByRole('heading', { name: 'The last session is still open' })
+        ).toBeInTheDocument();
+        expect(screen.getByRole('alert').textContent.trim()).toBe(STALE);
+
+        // A read the page makes for itself (the count, the stream reopening).
+        nextRead = { kind: 'ok', state: pending };
+        await readSessionState();
+        expect(screen.getByRole('alert').textContent.trim()).toBe(STALE);
+
+        // Answering the question is a new choice: the sentence goes.
+        answer.mockReturnValue(new Promise(() => {}));
+        await fireEvent.click(screen.getByRole('button', { name: 'Continue this session' }));
+        expect(screen.queryByRole('alert')).toBeNull();
     });
 });

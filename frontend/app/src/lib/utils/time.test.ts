@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDurationHms, formatSessionStart } from './time';
+import { formatClosedSession, formatDurationHms, formatSessionStart } from './time';
 
 describe('formatDurationHms', () => {
     it('formats zero as 00:00:00', () => {
@@ -60,5 +60,53 @@ describe('formatSessionStart', () => {
 
     it('gives nothing for a start it cannot read', () => {
         expect(formatSessionStart('not a time', now)).toBe('');
+    });
+});
+
+// A line of Continue's list (W-0029 part 6, the operator's ruling 3 of
+// 2026-11-25): "2026-11-20 09:15 to 11:42 UTC · 37 contacts", no end time
+// where the latest sitting has none, and "an end not confirmed" when a sitting
+// ended without a confirmed exit.
+describe('formatClosedSession', () => {
+    const line = (over: Partial<Parameters<typeof formatClosedSession>[0]> = {}): string =>
+        formatClosedSession({
+            openedAt: '2026-11-20T09:15:42Z',
+            latestSittingEndedAt: '2026-11-20T11:42:10Z',
+            anEndUnconfirmed: false,
+            contactCount: 37,
+            ...over,
+        });
+
+    it('gives the first start, the end of the latest sitting and the count, in UTC', () => {
+        expect(line()).toBe('2026-11-20 09:15 to 11:42 UTC · 37 contacts');
+    });
+
+    it("gives the end's date when it is another day than the start's", () => {
+        expect(line({ latestSittingEndedAt: '2026-11-22T08:05:00Z' })).toBe(
+            '2026-11-20 09:15 to 2026-11-22 08:05 UTC · 37 contacts'
+        );
+    });
+
+    it('makes up no end time for a sitting that has none', () => {
+        expect(line({ latestSittingEndedAt: null, anEndUnconfirmed: true })).toBe(
+            '2026-11-20 09:15 UTC · 37 contacts · an end not confirmed'
+        );
+    });
+
+    it('says so when an end was not confirmed, the last one or an earlier one', () => {
+        expect(line({ anEndUnconfirmed: true })).toBe(
+            '2026-11-20 09:15 to 11:42 UTC · 37 contacts · an end not confirmed'
+        );
+    });
+
+    it('counts one contact as one, and none as none', () => {
+        expect(line({ contactCount: 1 })).toBe('2026-11-20 09:15 to 11:42 UTC · 1 contact');
+        expect(line({ contactCount: 0 })).toBe('2026-11-20 09:15 to 11:42 UTC · 0 contacts');
+    });
+
+    it('reads a time given in another zone as UTC', () => {
+        expect(line({ openedAt: '2026-11-20T23:30:00-02:00', latestSittingEndedAt: null })).toBe(
+            '2026-11-21 01:30 UTC · 37 contacts'
+        );
     });
 });

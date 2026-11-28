@@ -3,6 +3,7 @@ import { ARCHIVE_HEADER, setBoundArchive } from './archive-guard';
 import { TEST_ARCHIVE } from '../../test/archive';
 import {
     answerOperatingSession,
+    fetchClosedSessions,
     fetchOperatingSession,
     fetchSessionMembers,
 } from './operating-session';
@@ -331,6 +332,160 @@ describe('fetchSessionMembers', () => {
             vi.fn(() => Promise.reject(new TypeError('network')))
         );
         expect(await fetchSessionMembers()).toEqual({
+            kind: 'error',
+            message: 'Cannot reach the daemon.',
+        });
+    });
+});
+
+// W-0029 part 6, slice 3: Continue's list as the page reads it. A list the
+// page cannot read in full is an ERROR, never a shorter list and never "nothing
+// to continue"; a further page of a list that has changed is STALE, which is
+// neither.
+describe('fetchClosedSessions', () => {
+    const LOGBOOK = '01a187bc-0173-7649-8ff3-71db8170c309';
+    const S1 = '01a1f83c-da20-751f-80b7-ec9a3f1f9301';
+    const S2 = '01a1f83c-da20-751f-80b7-ec9a3f1f9302';
+    const line = (id: string, over: Record<string, unknown> = {}): unknown => ({
+        id,
+        logbook_uuid: LOGBOOK,
+        opened_at: '2026-11-20T09:15:00Z',
+        latest_sitting_started_at: '2026-11-21T08:00:00Z',
+        latest_sitting_ended_at: '2026-11-21T11:42:00Z',
+        an_end_unconfirmed: false,
+        contact_count: 37,
+        ...over,
+    });
+    const list = (sessions: unknown[], over: Record<string, unknown> = {}): unknown => ({
+        archive_id: TEST_ARCHIVE,
+        generation: 9,
+        logbook_uuid: LOGBOOK,
+        sessions,
+        more: false,
+        ...over,
+    });
+
+    it('asks for the first page with its limit, and reads each line, the archive, the generation and whether there are more', async () => {
+        stub(
+            200,
+            list(
+                [
+                    line(S1),
+                    line(S2, {
+                        latest_sitting_ended_at: null,
+                        an_end_unconfirmed: true,
+                        contact_count: 0,
+                    }),
+                ],
+                { more: true }
+            )
+        );
+
+        const out = await fetchClosedSessions(20);
+
+        expect(sent).toEqual([
+            {
+                url: '/v1/operating-session/closed?limit=20',
+                method: 'GET',
+                body: null,
+                archive: null,
+            },
+        ]);
+        expect(out).toEqual({
+            kind: 'ok',
+            archiveId: TEST_ARCHIVE,
+            generation: 9,
+            logbookUuid: LOGBOOK,
+            more: true,
+            sessions: [
+                {
+                    id: S1,
+                    openedAt: '2026-11-20T09:15:00Z',
+                    latestSittingStartedAt: '2026-11-21T08:00:00Z',
+                    latestSittingEndedAt: '2026-11-21T11:42:00Z',
+                    anEndUnconfirmed: false,
+                    contactCount: 37,
+                },
+                {
+                    id: S2,
+                    openedAt: '2026-11-20T09:15:00Z',
+                    latestSittingStartedAt: '2026-11-21T08:00:00Z',
+                    latestSittingEndedAt: null,
+                    anEndUnconfirmed: true,
+                    contactCount: 0,
+                },
+            ],
+        });
+    });
+
+    it("a further page names the session it follows and that page's generation", async () => {
+        stub(200, list([line(S2)]));
+
+        await fetchClosedSessions(1000, { sessionId: S1, generation: 9 });
+
+        expect(sent[0].url).toBe(
+            `/v1/operating-session/closed?limit=1000&after=${S1}&generation=9`
+        );
+    });
+
+    it('reads an empty list, and one with no default logbook, as a list', async () => {
+        stub(200, list([], { logbook_uuid: '' }));
+        const out = await fetchClosedSessions(20);
+        expect(out.kind === 'ok' && out.sessions).toEqual([]);
+        expect(out.kind === 'ok' && out.logbookUuid).toBe('');
+    });
+
+    it('a further page refused as stale is stale: not an error, and not the end of the list', async () => {
+        stub(409, { code: 'operating_session_stale', message: 'read it again from its start' });
+        expect(await fetchClosedSessions(20, { sessionId: S1, generation: 9 })).toEqual({
+            kind: 'stale',
+        });
+    });
+
+    it.each([
+        ['a line with no id', list([line('not-a-uuid')])],
+        ['a line with no count', list([line(S1, { contact_count: undefined })])],
+        ['a line with a negative count', list([line(S1, { contact_count: -1 })])],
+        ['a line whose start is not a time', list([line(S1, { opened_at: 'yesterday' })])],
+        [
+            'a line whose latest sitting has no start',
+            list([line(S1, { latest_sitting_started_at: null })]),
+        ],
+        ['a line whose end is not a time', list([line(S1, { latest_sitting_ended_at: 'later' })])],
+        [
+            'a line that does not say whether an end was confirmed',
+            list([line(S1, { an_end_unconfirmed: undefined })]),
+        ],
+        [
+            'a line that does not say when its latest sitting ended (null says it has no end)',
+            list([line(S1, { latest_sitting_ended_at: undefined })]),
+        ],
+        ['an empty page that says there are more', list([], { more: true })],
+        ['no generation', list([line(S1)], { generation: undefined })],
+        ['no archive', list([line(S1)], { archive_id: undefined })],
+        ['no word on whether there are more', list([line(S1)], { more: undefined })],
+        ['sessions that are not a list', list([], { sessions: {} })],
+    ])('%s is an error, never a shorter list', async (_name, body) => {
+        stub(200, body);
+        expect(await fetchClosedSessions(20)).toEqual({
+            kind: 'error',
+            message: 'The daemon answered with a list of sessions this page cannot read.',
+        });
+    });
+
+    it("is an error with the daemon's words when the daemon refuses", async () => {
+        stub(503, { code: 'operating_session_unavailable', message: 'could not be read' });
+        const out = await fetchClosedSessions(20);
+        expect(out.kind).toBe('error');
+        expect(out.kind === 'error' && out.message).toMatch(/could not be read/);
+    });
+
+    it('is an error when the daemon cannot be reached', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(new TypeError('network')))
+        );
+        expect(await fetchClosedSessions(20)).toEqual({
             kind: 'error',
             message: 'Cannot reach the daemon.',
         });

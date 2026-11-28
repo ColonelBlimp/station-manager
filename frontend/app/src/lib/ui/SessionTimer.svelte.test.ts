@@ -8,6 +8,7 @@ import { render, screen } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import SessionTimer from './SessionTimer.svelte';
 import {
+    sessionControlStands,
     sessionStateDrawn,
     setSessionPorts,
     _resetSessionForTests,
@@ -123,5 +124,28 @@ describe('SessionTimer', () => {
         open(S1, 4, null);
         render(SessionTimer);
         expect(shown()).toBe('');
+    });
+
+    // The operator's ruling 1, 2026-11-27: when a control's outcome is not
+    // known the sitting on screen may have ended, and the clock must not go on
+    // counting it. While the control is only on its way the clock stays.
+    it("shows no time while a control's outcome is not known, and counts again once it is", () => {
+        open(S1, 4, '2026-11-25T10:29:55Z');
+        render(SessionTimer);
+        expect(shown()).toBe('01:30:05');
+
+        sessionControlStands('out');
+        flushSync();
+        expect(shown()).toBe('01:30:05');
+
+        sessionControlStands('unknown');
+        flushSync();
+        expect(shown()).toBe('');
+
+        // New had been applied: the new sitting is drawn, and the gate says so.
+        open(S2, 6, '2026-11-25T11:59:50Z');
+        sessionControlStands('');
+        flushSync();
+        expect(shown()).toBe('00:00:10');
     });
 });

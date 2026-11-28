@@ -25,6 +25,7 @@
     import { operate } from './state.svelte';
     import { submitState } from './qso.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
+    import { continueList } from './continueList.svelte';
     import { toasts } from '../ui/toasts.svelte';
 
     // A text field is focused → Ctrl+Shift+Arrow is native word-select, so the
@@ -59,6 +60,7 @@
         // pileupKeys.svelte.test.ts). (The pile-up drawer is docked, not
         // modal, so shortcuts stay live there.)
         if (operate.exportOpen || submitState.duplicate || sessionEdit.row !== null) return;
+        if (continueList.open) return; // Continue's list (W-0029 part 6) is a modal too
         if (!e.ctrlKey || !e.shiftKey) return; // the rig family is Ctrl+Shift only
 
         if (e.code === 'Backslash') {

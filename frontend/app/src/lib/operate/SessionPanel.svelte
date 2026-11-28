@@ -15,7 +15,20 @@
     // edit unmounts the FT8 view and takes a live CQ run off the air
     // (demand-driven capture). Rows without a uuid (pre-upgrade sessions)
     // render as plain text.
+    //
+    // The controls (W-0029 part 6, slice 3; criteria E, F): "Continue…" opens
+    // the list of earlier sessions, with the ruled sentence beside it. It is
+    // offered only where it can act (a session open, or none) and only when
+    // there is something to continue or the list could not be read. What a
+    // control that was not applied came to is said on a line here, in the
+    // words given. And when the page could not find out what a control did
+    // (session.control "unknown"; the operator's ruling 1, 2026-11-27) the
+    // panel says so, says the rows are as last read, and offers "Try again",
+    // which reads the state once and sends no control.
     import { session } from './session.svelte';
+    import { recovery, readAfterUnknown } from '../recovery.svelte';
+    import { continueList, openContinue, closeContinue } from './continueList.svelte';
+    import ContinueDialog from './ContinueDialog.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
     import { openExport, focusCallsign } from './state.svelte';
     import { hideTile } from './layout.svelte';
@@ -47,6 +60,24 @@
         nowMs = daemonNowMs();
     }, 1000);
     onDestroy(() => clearInterval(startTicker));
+    // The dialog lives in this panel: with the panel gone it is closed.
+    onDestroy(closeContinue);
+
+    const controlsOffered = $derived(session.state === 'open' || session.state === 'none');
+    const continueOffered = $derived(
+        controlsOffered &&
+            (continueList.available === 'some' || continueList.available === 'unreadable')
+    );
+    let retrying = $state(false);
+    async function tryAgain(): Promise<void> {
+        if (retrying) return;
+        retrying = true;
+        try {
+            await readAfterUnknown();
+        } finally {
+            retrying = false;
+        }
+    }
     const started = $derived(
         session.sessionId !== null && session.openedAt !== null
             ? formatSessionStart(session.openedAt, new Date(nowMs))
@@ -56,6 +87,9 @@
     // Why there are no rows to show; '' when there are rows.
     const emptyReason = $derived.by(() => {
         if (session.qsos.length > 0) return '';
+        // Which session is open is not known: nothing below may say it is
+        // empty, or that none is open.
+        if (session.control === 'unknown') return 'The session could not be read.';
         if (session.state === 'archive_switching') return 'The archive is being switched.';
         if (session.sessionId === null) return 'No session is open.';
         if (session.rows === 'failed') {
@@ -75,6 +109,15 @@
             Session <span class="font-normal text-muted"
                 >({session.qsos.length.toLocaleString()})</span
             >
+            <!-- While a control's outcome is not known the count is as last
+                 read, whether or not there are rows under it: "Session (0)"
+                 would be a claim about a session the page does not know
+                 (codex-291). -->
+            {#if session.control === 'unknown'}
+                <span class="ml-1 text-xs font-normal text-warning" data-testid="session-last-read"
+                    >last read</span
+                >
+            {/if}
             {#if started !== ''}
                 <span class="ml-2 text-xs font-normal text-muted" data-testid="session-started"
                     >Started {started}</span
@@ -120,6 +163,41 @@
             </button>
         </div>
     </div>
+
+    {#if continueOffered}
+        <div class="mt-2 flex items-center gap-x-3" data-testid="session-controls">
+            <button
+                class="btn text-xs"
+                title="Continue an earlier session"
+                disabled={session.control !== ''}
+                onclick={openContinue}
+            >
+                Continue…
+            </button>
+            <span class="text-xs text-muted">Contacts stay in the session they were logged in.</span
+            >
+        </div>
+    {/if}
+    {#if session.control === 'unknown'}
+        <p class="mt-2 text-xs text-invalid" role="alert" data-testid="session-unknown">
+            <!-- What the control came to stays said; why the session could not
+                 be read is said beside it, never in its place (codex-291). -->
+            {recovery.controlError} The session could not be read{recovery.unreadError === ''
+                ? '.'
+                : `: ${recovery.unreadError}`}
+            {#if session.qsos.length > 0}The contacts below are as last read.{/if}
+            <button
+                type="button"
+                class="ml-1 cursor-pointer underline disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={retrying}
+                onclick={() => void tryAgain()}>Try again</button
+            >
+        </p>
+    {:else if recovery.controlError !== ''}
+        <p class="mt-2 text-xs text-invalid" role="alert" data-testid="session-control-error">
+            {recovery.controlError}
+        </p>
+    {/if}
 
     {#if sessionEdit.openError !== null}
         <p class="mt-2 text-xs text-invalid" data-testid="session-edit-error">
@@ -213,6 +291,8 @@
         {/if}
     </div>
 </div>
+
+<ContinueDialog />
 
 {#if sessionEdit.row !== null}
     <EditQsoModal

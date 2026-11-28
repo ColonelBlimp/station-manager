@@ -55,6 +55,12 @@
                     )}.
                 </p>
             </div>
+            <!-- What a control pressed in the WORKSPACE came to, when this card is
+                 what the operator is then looking at (a stale refusal can carry a
+                 state that asks this question; codex-290). -->
+            {#if recovery.controlError !== ''}
+                <p role="alert" class="pb-3 text-sm text-warn">{recovery.controlError}</p>
+            {/if}
             {#if recovery.error !== ''}
                 <p role="alert" class="pb-3 text-sm text-warn">{recovery.error}</p>
             {/if}
@@ -86,6 +92,12 @@
                     workspace is not shown yet.
                 </p>
             </div>
+            <!-- What a control pressed in the WORKSPACE came to, when this card is
+                 what the operator is then looking at (a stale refusal can carry a
+                 state that asks this question; codex-290). -->
+            {#if recovery.controlError !== ''}
+                <p role="alert" class="pb-3 text-sm text-warn">{recovery.controlError}</p>
+            {/if}
             {#if recovery.error !== ''}
                 <p role="alert" class="pb-3 text-sm text-warn">{recovery.error}</p>
             {/if}

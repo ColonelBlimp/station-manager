@@ -635,3 +635,246 @@ describe('SessionPanel start line across midnight UTC', () => {
         expect(screen.getByTestId('session-started')).toHaveTextContent('Started 09:15 UTC');
     });
 });
+
+// W-0029 part 6, slice 3: the panel's controls, and what it says of a control
+// that was not applied (criteria E, F; the operator's rulings of 2026-11-27).
+describe('SessionPanel controls', () => {
+    const SENTENCE = 'Contacts stay in the session they were logged in.';
+    const S1 = '01a1f83c-da20-7000-8000-0000000000a1';
+    let listReads: number;
+    let stateReads: number;
+
+    beforeEach(async () => {
+        _resetRecoveryForTests();
+        const list = await import('./continueList.svelte');
+        list._resetContinueForTests();
+        listReads = 0;
+        stateReads = 0;
+        list.setContinuePorts({
+            read: () => {
+                listReads++;
+                return new Promise(() => {});
+            },
+            archive: () => TEST_ARCHIVE,
+            readState: () => {},
+            send: () => Promise.resolve('applied'),
+        });
+        setSessionPorts({
+            readRows: () => new Promise(() => {}),
+            readState: () => Promise.resolve(true),
+            archive: () => TEST_ARCHIVE,
+        });
+    });
+
+    async function shown(
+        state: 'open' | 'none' | 'archive_switching',
+        available: 'unread' | 'some' | 'none' | 'unreadable'
+    ): Promise<void> {
+        const list = await import('./continueList.svelte');
+        const drawn = {
+            archiveId: TEST_ARCHIVE,
+            generation: 4,
+            state,
+            session:
+                state === 'open'
+                    ? {
+                          id: S1,
+                          openedAt: '2026-11-25T09:15:00Z',
+                          sittingStartedAt: '2026-11-25T09:15:00Z',
+                      }
+                    : null,
+        };
+        sessionStateDrawn(drawn);
+        list.continueStateDrawn(drawn);
+        list.continueList.available = available;
+        flushSync();
+    }
+    const continueButton = (): HTMLElement | null =>
+        screen.queryByRole('button', { name: 'Continue…' });
+
+    it.each([
+        ['open', 'some'],
+        ['none', 'some'],
+        ['open', 'unreadable'],
+    ] as const)(
+        'offers Continue, with the sentence beside it, in "%s" when the list is "%s"',
+        async (state, available) => {
+            render(SessionPanel);
+            await shown(state, available);
+            expect(continueButton()).toBeEnabled();
+            expect(screen.getByText(SENTENCE)).toBeInTheDocument();
+        }
+    );
+
+    it.each([
+        ['open', 'none'],
+        ['open', 'unread'],
+        ['archive_switching', 'some'],
+    ] as const)('does not offer it in "%s" when the list is "%s"', async (state, available) => {
+        render(SessionPanel);
+        await shown(state, available);
+        expect(continueButton()).toBeNull();
+        expect(screen.queryByText(SENTENCE)).toBeNull();
+    });
+
+    it('pressing it opens the list, which is read then', async () => {
+        const list = await import('./continueList.svelte');
+        render(SessionPanel);
+        await shown('open', 'some');
+        const before = listReads;
+
+        await fireEvent.click(continueButton()!);
+        flushSync();
+
+        expect(list.continueList.open).toBe(true);
+        expect(listReads).toBe(before + 1);
+        expect(screen.getByRole('dialog', { name: 'Continue an earlier session' })).toBeVisible();
+    });
+
+    it.each(['out', 'unknown'] as const)(
+        'it cannot be pressed while a control is "%s"',
+        async (standing) => {
+            const { sessionControlStands } = await import('./session.svelte');
+            render(SessionPanel);
+            await shown('open', 'some');
+            sessionControlStands(standing);
+            flushSync();
+            expect(continueButton()).toBeDisabled();
+        }
+    );
+
+    it('says what a control that was not applied came to, in the words it was given', async () => {
+        const { recovery } = await import('../recovery.svelte');
+        render(SessionPanel);
+        await shown('open', 'some');
+        expect(screen.queryByRole('alert')).toBeNull();
+
+        recovery.controlError =
+            'The session changed before this could be done. Your choice was not applied.';
+        flushSync();
+
+        expect(screen.getByRole('alert').textContent.trim()).toBe(
+            'The session changed before this could be done. Your choice was not applied.'
+        );
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    });
+
+    it('when the outcome is not known: says so, that the rows are as last read, and "Try again" reads the state once', async () => {
+        const { recovery } = await import('../recovery.svelte');
+        const { sessionControlStands } = await import('./session.svelte');
+        setRecoveryPorts({
+            read: () => {
+                stateReads++;
+                return new Promise(() => {});
+            },
+            answer: () => Promise.reject(new Error('no control may be sent')),
+            archive: () => TEST_ARCHIVE,
+        });
+        render(SessionPanel);
+        await shown('open', 'some');
+        addSessionRow({
+            callsign: 'W1ABC',
+            timeOn: '14:30:00',
+            band: '20m',
+            mode: 'FT8',
+            rstSent: '',
+            rstRcvd: '',
+            name: '',
+            country: '',
+            comment: '',
+        });
+        recovery.status = 'clear';
+        recovery.unknown = true;
+        recovery.controlError = 'Cannot reach the daemon.';
+        sessionControlStands('unknown');
+        flushSync();
+
+        expect(screen.getByRole('alert').textContent.replace(/\s+/g, ' ').trim()).toMatch(
+            /^Cannot reach the daemon\. The session could not be read\. The contacts below are as last read\./
+        );
+        expect(screen.getByText('W1ABC')).toBeInTheDocument(); // the rows stay
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        expect(stateReads).toBe(1);
+        // One read at a time: it cannot be pressed again while that one is out.
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled();
+    });
+
+    // codex-291: a refusal that is certain (the choice was declined as stale)
+    // is not replaced by the failure of the read that followed it.
+    it('says what the control came to AND why the session could not be read, when both are so', async () => {
+        const { recovery } = await import('../recovery.svelte');
+        const { sessionControlStands } = await import('./session.svelte');
+        render(SessionPanel);
+        await shown('open', 'some');
+        addSessionRow({
+            callsign: 'W1ABC',
+            timeOn: '14:30:00',
+            band: '20m',
+            mode: 'FT8',
+            rstSent: '',
+            rstRcvd: '',
+            name: '',
+            country: '',
+            comment: '',
+        });
+        recovery.controlError =
+            'The session changed before this could be done. Your choice was not applied.';
+        recovery.unreadError = 'Cannot reach the daemon.';
+        sessionControlStands('unknown');
+        flushSync();
+
+        expect(screen.getByRole('alert').textContent.replace(/\s+/g, ' ').trim()).toMatch(
+            /^The session changed before this could be done\. Your choice was not applied\. The session could not be read: Cannot reach the daemon\. The contacts below are as last read\./
+        );
+    });
+
+    // codex-291: the count in the heading is as last read too, and must say so
+    // whether or not there are rows under it ("Session (0)" is a claim).
+    it.each([0, 1])(
+        'marks the count as last read while the outcome is not known (%i rows), and not otherwise',
+        async (rows) => {
+            const { sessionControlStands } = await import('./session.svelte');
+            render(SessionPanel);
+            await shown('open', 'some');
+            if (rows === 1) {
+                addSessionRow({
+                    callsign: 'W1ABC',
+                    timeOn: '14:30:00',
+                    band: '20m',
+                    mode: 'FT8',
+                    rstSent: '',
+                    rstRcvd: '',
+                    name: '',
+                    country: '',
+                    comment: '',
+                });
+            }
+            flushSync();
+            expect(screen.queryByTestId('session-last-read')).toBeNull();
+
+            sessionControlStands('unknown');
+            flushSync();
+            expect(screen.getByTestId('session-last-read').textContent.trim()).toBe('last read');
+
+            sessionControlStands('out');
+            flushSync();
+            expect(screen.queryByTestId('session-last-read')).toBeNull();
+        }
+    );
+
+    it('when the outcome is not known and no rows are shown, the panel does not say the session is empty', async () => {
+        const { recovery } = await import('../recovery.svelte');
+        const { sessionControlStands } = await import('./session.svelte');
+        render(SessionPanel);
+        await shown('none', 'some');
+        recovery.controlError = 'Cannot reach the daemon.';
+        sessionControlStands('unknown');
+        flushSync();
+
+        expect(screen.getByTestId('session-empty').textContent.trim()).toBe(
+            'The session could not be read.'
+        );
+        expect(screen.getByRole('alert').textContent).not.toMatch(/contacts below/);
+    });
+});

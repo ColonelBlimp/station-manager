@@ -27,6 +27,7 @@ function sessionQso(call: string): SessionQso {
 
 beforeEach(() => {
     session.qsos.length = 0;
+    session.control = '';
     router.mode = 'phone';
 });
 
@@ -93,6 +94,24 @@ describe('UtilRail session count badge', () => {
     // mode (app.css html[data-util='narrow'] .rail-badge) so it grows back over the
     // icon rather than off-screen. jsdom does no layout, so this asserts the hook the
     // CSS rule targets is actually on the element (codex review of 4e223176).
+    // The operator's ruling 1, 2026-11-27: the badge shows with the panel
+    // closed, where nothing can say the rows are only as last read.
+    it("is not shown while a control's outcome is not known, and is while one is only on its way", () => {
+        render(UtilRail);
+        session.qsos.push(sessionQso('K1ABC'));
+        session.control = 'out';
+        flushSync();
+        expect(screen.getByTitle('1 QSO this session')).toBeInTheDocument();
+
+        session.control = 'unknown';
+        flushSync();
+        expect(screen.queryByTitle(/QSOs? this session/)).toBeNull();
+
+        session.control = '';
+        flushSync();
+        expect(screen.getByTitle('1 QSO this session')).toBeInTheDocument();
+    });
+
     it('carries the class that right-anchors it in the narrow rail', () => {
         session.qsos.push(sessionQso('A1AA'));
         render(UtilRail);

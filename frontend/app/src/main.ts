@@ -15,6 +15,7 @@ import { allocateContestSerial } from './lib/api/contest-serial';
 import {
     refreshSessionRows,
     sessionContactStored,
+    sessionControlStands,
     sessionMayHaveChanged,
     sessionStateDrawn,
     sessionStreamLost,
@@ -101,15 +102,23 @@ import {
     recoveryContactStored,
     recoveryStreamLost,
     recoveryStreamOpened,
+    sendSessionControl,
     sessionArchiveProven,
     setRecoveryPorts,
 } from './lib/recovery.svelte';
 import { fileUnderArchive } from './lib/operate/archiveStores.svelte';
 import {
     answerOperatingSession,
+    fetchClosedSessions,
     fetchOperatingSession,
     fetchSessionMembers,
 } from './lib/api/operating-session';
+import {
+    continueContactDeleted,
+    continueStateDrawn,
+    continueStreamReopened,
+    setContinuePorts,
+} from './lib/operate/continueList.svelte';
 import { boundArchive } from './lib/api/archive-guard';
 import { setStationSaved } from './lib/config/station.svelte';
 import { setFt8PrefsSaved } from './lib/config/ft8.svelte';
@@ -746,14 +755,35 @@ function enrichmentExtras(call: string, myGrid: string) {
 // been read: when the stream drops (changes can no longer be announced) and
 // when the session is said to have changed (the rows on screen may be another
 // session's). It holds export and email from then until it has read again.
+//
+// The panel's controls (W-0029 part 6, slice 3) go by the gate as well: New
+// and Continue from the workspace are sent by the one path the recovery answer
+// takes, and the gate says where a control stands (control) so that everything
+// acting on the rows is held until its outcome has been drawn. Continue's list
+// follows each state drawn (whether there is anything to continue is asked for
+// that generation), is read again when the stream reopens and when a contact
+// is deleted while it is shown, and sends its choice through the gate with the
+// LIST's generation. A list newer than the state shown says the session has
+// moved, which is what sessionMayHaveChanged is for.
 setRecoveryPorts({
     read: fetchOperatingSession,
     answer: answerOperatingSession,
     archive: boundArchive,
-    drawn: sessionStateDrawn,
+    drawn: (state) => {
+        sessionStateDrawn(state);
+        continueStateDrawn(state);
+    },
+    control: sessionControlStands,
     // A state answered for another archive than the one proven goes to the sink
     // every write from another archive goes to: it starts the archive check.
     otherArchive: (id) => fileUnderArchive(id, 'session state', () => {}),
+});
+setContinuePorts({
+    read: fetchClosedSessions,
+    archive: boundArchive,
+    readState: sessionMayHaveChanged,
+    send: (generation, sessionId) => sendSessionControl('continue', generation, sessionId),
+    otherArchive: (id) => fileUnderArchive(id, 'closed sessions', () => {}),
 });
 setSessionPorts({
     readRows: fetchSessionMembers,
@@ -769,6 +799,7 @@ openLogEvents({
         // of this connection, and nothing sent before it is drawn after it.
         recoveryStreamOpened();
         sessionStreamReopened();
+        continueStreamReopened();
     },
     onTransportError: () => {
         // The gate too: nothing sent before the loss is drawn after it.
@@ -784,6 +815,9 @@ openLogEvents({
         const joined = p.operating_session_id !== undefined && p.operating_session_id !== '';
         if (event === 'qso.stored' && joined) recoveryContactStored();
         if (event === 'qso.deleted') recoveryContactDeleted();
+        // A deleted contact may have been a closed session's: its count in
+        // Continue's list is then lower, with no generation moved.
+        if (event === 'qso.deleted') continueContactDeleted();
         if (event === 'qso.stored') sessionContactStored(p.operating_session_id);
         else refreshSessionRows();
     },

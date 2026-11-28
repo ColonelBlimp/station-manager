@@ -95,7 +95,20 @@
         not repeated; the next read drawn clears it (the operator's ruling,
         2026-11-27);
       - the page never sends an answer again by itself. After a stale refusal
-        it draws the state returned; after a failure it reads and draws.
+        it draws the state returned; after a failure it reads and draws;
+      - New and Continue pressed in the WORKSPACE (the Session panel, W-0029
+        part 6) are sent by the same one path, one control out at a time for
+        the whole page, and every rule above holds for them. What differs is
+        what is shown when a control's outcome is not known. The workspace is
+        never taken away for it: the FT8 view and its event stream are the
+        app's presence for a run, and a run is meant to cross New. So where
+        the question's answer would end on "could not be read", a control
+        from the workspace ends on `unknown`: the workspace stays, the panel
+        says so with "Try again", and no control can be sent until a read
+        sent after the failure has been drawn. And a control answered after
+        the connection changed is not drawn and not withheld for: what it did
+        is not known, exactly as if it had failed, and the page reads (the
+        operator's ruling 1, 2026-11-27).
 
     ADR 0045: this module never imports lib/api. main.ts injects the read, the
     answer and the bound archive (setRecoveryPorts), which is why the shapes
@@ -144,7 +157,26 @@ export interface RecoveryPorts {
     /** Told when a read sent with an archive proven is answered for ANOTHER
      *  archive: what starts the page's own archive check. */
     otherArchive?: (archiveId: string) => void;
+    /** Told where a control stands, each time it changes: "out" from the
+     *  moment one is sent until its outcome has been drawn (through the read
+     *  that finds out what a failed one did); "unknown" when that read failed
+     *  too and nothing is reading; "" otherwise. */
+    control?: (standing: ControlStanding) => void;
 }
+
+export type ControlStanding = '' | 'out' | 'unknown';
+
+/** How a control sent from the workspace ended. "unsent": nothing was sent
+ *  (no workspace is showing, a control is out, or the session is not known). */
+export type ControlEnd = 'applied' | 'stale' | 'failed' | 'unsent';
+
+/** What a stale refusal of a control from the workspace says (the operator's
+ *  ruling 2, 2026-11-27). It does not say nothing was changed: the daemon's
+ *  test for a changed default logbook runs first, and what that closed is kept. */
+export const CONTROL_STALE =
+    'The session changed before this could be done. Your choice was not applied.';
+
+const CONTROL_LINK_CHANGED = 'The connection to the daemon changed while this was being done.';
 
 export type RecoveryStatus = 'loading' | 'question' | 'unreadable' | 'clear';
 
@@ -164,7 +196,28 @@ export const recovery: {
     answering: boolean;
     /** What went wrong with the last read or answer; '' when nothing did. */
     error: string;
-} = $state({ status: 'loading', session: null, generation: 0, answering: false, error: '' });
+    /** A control sent from the workspace has an outcome the page does not
+     *  know, and the read that should say failed: the workspace stays, and no
+     *  control is sent until a read sent since has been drawn. */
+    unknown: boolean;
+    /** What the last control sent from the workspace came to when it was not
+     *  applied; '' when there is nothing to say. A later failure to read the
+     *  session never replaces it: a stale refusal is a verdict on the
+     *  operator's choice and stays said (codex-291). */
+    controlError: string;
+    /** Why the session could not be read, while it is not known; '' when the
+     *  read was only dropped, or the session is known. */
+    unreadError: string;
+} = $state({
+    status: 'loading',
+    session: null,
+    generation: 0,
+    answering: false,
+    error: '',
+    unknown: false,
+    controlError: '',
+    unreadError: '',
+});
 
 let ports: RecoveryPorts | null = null;
 // The state last kept: its archive and generation, the number its request took
@@ -227,6 +280,16 @@ let draws = 0;
 /** Inject the read, the answer and the bound archive (main.ts). */
 export function setRecoveryPorts(p: RecoveryPorts): void {
     ports = p;
+}
+
+// Where a control stands is two flags, and whoever shows the Session is told
+// each time either changes.
+function standing(answering: boolean, unknown: boolean): void {
+    const before = recovery.unknown ? 'unknown' : recovery.answering ? 'out' : '';
+    recovery.answering = answering;
+    recovery.unknown = unknown;
+    const now = unknown ? 'unknown' : answering ? 'out' : '';
+    if (now !== before) ports?.control?.(now);
 }
 
 /**
@@ -316,6 +379,13 @@ function noteOrder(doubt: boolean, disagrees: boolean, oldLink: boolean): void {
 
 function show(state: SessionStateLike, changesWhenSent: number): void {
     draws++;
+    // A state drawn is one sent after any failure (none from before is drawn):
+    // the session is known again. And what went wrong with a control is said
+    // until the session next moves on, which is not while that control is
+    // still being found out about.
+    if (recovery.unknown) standing(recovery.answering, false);
+    recovery.unreadError = '';
+    if (!recovery.answering && state.generation !== recovery.generation) recovery.controlError = '';
     recovery.generation = state.generation;
     ports?.drawn?.(state);
     if (state.state === 'recovery_pending' && state.session !== null) {
@@ -374,9 +444,13 @@ async function read(uncertain: boolean, forCount = false): Promise<boolean> {
 async function readToItsEnd(uncertain: boolean, forCount = false): Promise<ReadEnd> {
     if (ports === null) return 'undrawn';
     readsOut++;
+    // The number this read takes in the order of requests. It is taken here,
+    // and not only inside the read, because what this read may SETTLE when it
+    // ends is decided by when it was sent, as what it may draw is.
+    const sentAs = ++asked;
     let end: ReadEnd = 'undrawn';
     try {
-        end = await readOnce(ports, uncertain, forCount);
+        end = await readOnce(ports, sentAs, uncertain, forCount);
         return end;
     } finally {
         readsOut--;
@@ -394,14 +468,36 @@ async function readToItsEnd(uncertain: boolean, forCount = false): Promise<ReadE
             readsThisLink === 0 &&
             (recovery.status === 'loading' || owed !== 0)
         ) {
-            recovery.status = 'unreadable';
-            recovery.session = null;
+            notRead();
         }
-        // What a failed answer did is known once a read has been drawn, or
-        // the page has said it could not read: the choices may come back.
-        // (A read that was drawn was sent after the failure: none from
-        // before it is drawn.)
-        if (owed !== 0 && (end === 'drawn' || recovery.status === 'unreadable')) release();
+        // What a failed answer did is known once a read sent after the
+        // failure has been drawn, or the page has said it could not read:
+        // the choices may come back.
+        //
+        // "Drawn" pays the debt only for a read SENT after the failure. A read
+        // sent before it can be drawn in the very turn the failure arrives:
+        // drawn first, when no failure was known (rightly), with the failure
+        // learnt and its own read sent before this point is reached. That
+        // draw says nothing of a failure learnt after it, and must not give
+        // the choices back while the read that finds out is still out: a
+        // second press would send a second control (codex-292).
+        const said = recovery.status === 'unreadable' || recovery.unknown;
+        const drawnSince = end === 'drawn' && sentAs > failedAt;
+        if (owed !== 0 && (drawnSince || said)) release();
+        // A debt is never left with nothing reading and nothing said. This
+        // read was not drawn, and none is out that might be: nothing says
+        // what the control did, in this archive. The page says so, as it does
+        // when the read that finds out fails, and "Try again" is there. That
+        // covers the read answered for another archive (codex-290), and the
+        // case where the control's own read is dropped for its connection
+        // while the reopening's read is the one answered for another archive:
+        // neither ends inside the control's own handling (codex-291). An
+        // identity check that then proves this archive says nothing of which
+        // session is open in it.
+        else if (owed !== 0 && readsOut === 0) {
+            notRead();
+            release();
+        }
     }
 }
 
@@ -409,14 +505,33 @@ async function readToItsEnd(uncertain: boolean, forCount = false): Promise<ReadE
 // debt is paid, and the choices may come back.
 function release(): void {
     owed = 0;
-    recovery.answering = false;
+    standing(false, recovery.unknown);
+}
+
+// The session could not be read, and what the daemon holds is not known. With
+// the workspace showing it stays, and the session is `unknown`; otherwise the
+// page says the session could not be read, in place of everything.
+function notRead(message?: string): void {
+    if (recovery.status === 'clear') {
+        if (message !== undefined) recovery.unreadError = message;
+        standing(recovery.answering, true);
+        return;
+    }
+    recovery.status = 'unreadable';
+    recovery.session = null;
+    if (message !== undefined) recovery.error = message;
 }
 
 // How a read ended: its answer was drawn; it was not (it failed, or was refused
 // or set aside or withheld); or it was dropped for its connection.
 type ReadEnd = 'drawn' | 'undrawn' | 'dropped';
 
-async function readOnce(p: RecoveryPorts, uncertain: boolean, forCount: boolean): Promise<ReadEnd> {
+async function readOnce(
+    p: RecoveryPorts,
+    sentAs: number,
+    uncertain: boolean,
+    forCount: boolean
+): Promise<ReadEnd> {
     const drawsWhenSent = draws;
     const arrivalsWhenSent = arrivals;
     const changesWhenSent = changes;
@@ -426,7 +541,6 @@ async function readOnce(p: RecoveryPorts, uncertain: boolean, forCount: boolean)
     // archive: it may be older than the read the proof itself sends, and
     // drawing it would also make that read's failure look obsolete.
     const sentFor = p.archive();
-    const sentAs = ++asked;
     const linkWhenSent = links;
     readsThisLink++;
     const out = await p.read();
@@ -458,9 +572,7 @@ async function readOnce(p: RecoveryPorts, uncertain: boolean, forCount: boolean)
     if (draws !== drawsWhenSent) return 'undrawn'; // obsolete: a state has been drawn since this was sent
     const nothingDrawn = recovery.status === 'loading' || recovery.status === 'unreadable';
     if (nothingDrawn || uncertain || owed !== 0) {
-        recovery.status = 'unreadable';
-        recovery.session = null;
-        recovery.error = out.message;
+        notRead(out.message);
     } else if (forCount && recovery.status === 'question') {
         // The count shown is the last one received: say that reading it
         // again failed. The question and its choices stay.
@@ -549,18 +661,64 @@ export async function answerRecovery(answer: RecoveryAnswer): Promise<void> {
     if (ports === null || recovery.status !== 'question' || recovery.answering) return;
     const session = recovery.session;
     if (session === null) return;
-    recovery.answering = true;
     recovery.error = '';
+    recovery.controlError = '';
+    await send(ports, false, answer, recovery.generation, session.id);
+}
+
+/**
+ * Send New or Continue from the workspace (the Session panel). New carries the
+ * generation of the state shown; Continue carries the generation of the LIST
+ * its line was chosen from, and that line's session. Nothing is sent unless
+ * the workspace is showing, no control is out anywhere on the page, and the
+ * session is known.
+ */
+export async function sendSessionControl(
+    answer: RecoveryAnswer,
+    generation: number,
+    sessionId: string
+): Promise<ControlEnd> {
+    if (ports === null || recovery.status !== 'clear') return 'unsent';
+    if (recovery.answering || recovery.unknown) return 'unsent';
+    recovery.controlError = '';
+    return send(ports, true, answer, generation, sessionId);
+}
+
+/**
+ * "Try again" in the workspace, when the session is not known: one read of the
+ * state, and no control. If it fails the session stays not known, with what
+ * went wrong now.
+ */
+export function readAfterUnknown(): Promise<boolean> {
+    if (!recovery.unknown) return Promise.resolve(false);
+    return read(true);
+}
+
+// send is the one path a control takes, from the question or the workspace.
+async function send(
+    p: RecoveryPorts,
+    fromWorkspace: boolean,
+    answer: RecoveryAnswer,
+    generation: number,
+    sessionId: string
+): Promise<ControlEnd> {
+    standing(true, false);
     const sentAs = ++asked;
     const arrivalsWhenSent = arrivals;
     const changesWhenSent = changes;
     const linkWhenSent = links;
-    const out = await ports.answer(answer, recovery.generation, session.id);
-    if (out.kind === 'applied' || out.kind === 'stale') {
-        recovery.answering = false;
-        take(out.state, sentAs, arrivalsWhenSent, changesWhenSent, linkWhenSent !== links);
+    const out = await p.answer(answer, generation, sessionId);
+    const oldLink = linkWhenSent !== links;
+    // From the workspace, an answer that arrives after the connection changed
+    // is not drawn and nothing is withheld for it: what it did is not known,
+    // as if it had failed, and the page reads (below).
+    const notKnown = fromWorkspace && oldLink;
+    if ((out.kind === 'applied' || out.kind === 'stale') && !notKnown) {
+        standing(false, recovery.unknown);
+        take(out.state, sentAs, arrivalsWhenSent, changesWhenSent, oldLink);
+        if (fromWorkspace && out.kind === 'stale') recovery.controlError = CONTROL_STALE;
         settle();
-        return;
+        return out.kind;
     }
     // The answer may or may not have been applied: say what went wrong, then
     // read what the daemon holds. Nothing is sent again by the page, and no
@@ -574,20 +732,28 @@ export async function answerRecovery(answer: RecoveryAnswer): Promise<void> {
     // the session could not be read (the review of d7bcf9e5).
     //
     // Every request sent up to now was sent before this failure, and none of
-    // them is drawn from here on. The debt is THIS answer's: when its read
-    // ends, the choices come back only if the debt is still this one. A read
-    // sent later may have paid it already, and another answer may be out by
-    // then, or have failed in its turn (codex-284).
-    recovery.error = out.message;
+    // them is drawn from here on. The debt is paid only by a read sent after
+    // it that is drawn, or by the page saying the session could not be read.
+    // A read sent later may pay it before this answer's own read ends, and
+    // another answer may be out by then, or have failed in its turn: the end
+    // of an earlier answer's read gives nothing back while a later debt has
+    // a read out (codex-284).
+    // A stale refusal that arrived after the connection changed still says
+    // one thing for certain: the choice was declined (codex-290).
+    const message =
+        out.kind === 'failed'
+            ? out.message
+            : out.kind === 'stale'
+              ? CONTROL_STALE
+              : CONTROL_LINK_CHANGED;
+    if (fromWorkspace) recovery.controlError = message;
+    else recovery.error = message;
     failedAt = asked;
-    const mine = failedAt;
-    owed = mine;
-    let end: ReadEnd = 'undrawn';
-    try {
-        end = await readToItsEnd(true);
-    } finally {
-        if (end !== 'dropped' && owed === mine) release();
-    }
+    owed = failedAt;
+    // The read that finds out. When the choices come back is decided where
+    // every read ends (readToItsEnd): by this read, or by a later one.
+    await readToItsEnd(true);
+    return 'failed';
 }
 
 /** Test seam — restore the singleton between cases. */
@@ -597,6 +763,9 @@ export function _resetRecoveryForTests(): void {
     recovery.generation = 0;
     recovery.answering = false;
     recovery.error = '';
+    recovery.unknown = false;
+    recovery.controlError = '';
+    recovery.unreadError = '';
     ports = null;
     drawn = null;
     asked = 0;

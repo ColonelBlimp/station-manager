@@ -57,7 +57,15 @@
         it has opened for the first time nothing can announce a change. So: a download from those rows would leave out the contact just
         logged, and a send would mail again the contacts just mailed. Rows on
         screen are kept while it is behind; what is known is that they are not
-        all, or not as they now are.
+        all, or not as they now are;
+      - a control sent from this window (New, Continue; slice 3) may close the
+        session shown. From the moment it is sent until its outcome has been
+        drawn, the rows on screen may be of a session that is no longer the
+        open one: the gate says where the control stands (session.control),
+        and while it stands anywhere the Session is behind. If the page could
+        not find out what the control did ("unknown"), it stays so until a
+        state sent after that has been drawn, and "Read again" asks for the
+        state as well as the rows.
 
     ADR 0045: this module never imports lib/api. main.ts injects the read of
     the rows, the read of the state and the bound archive (setSessionPorts).
@@ -153,6 +161,12 @@ export const session: {
      *  on its way; the last one failed and nothing is being read; the event
      *  stream is down. '' when they are not behind. */
     hold: '' | 'reading' | 'failed' | 'stream';
+    /** Where a control sent from this window stands, as the recovery gate
+     *  says: "out" from the moment it is sent until its outcome has been
+     *  drawn; "unknown" when the page could not find out what it did and
+     *  nothing is reading; '' otherwise. It is stated with no session shown
+     *  too, where nothing is "behind". */
+    control: '' | 'out' | 'unknown';
 } = $state({
     qsos: [],
     state: null,
@@ -163,6 +177,7 @@ export const session: {
     error: '',
     behind: false,
     hold: '',
+    control: '',
 });
 
 let ports: SessionPorts | null = null;
@@ -208,11 +223,13 @@ let stateAgain = false;
 // mark says whether the rows are behind, and why, from what is known now. It
 // is called after everything that can change the answer.
 function mark(): void {
-    const behind = shown !== null && (!streamUp || asks > asksRead || stateAsks > stateAsksRead);
+    const unsettled = session.control !== '';
+    const behind =
+        shown !== null && (!streamUp || asks > asksRead || stateAsks > stateAsksRead || unsettled);
     session.behind = behind;
     if (!behind) session.hold = '';
     else if (!streamUp) session.hold = 'stream';
-    else if (out || stateReads > 0) session.hold = 'reading';
+    else if (out || stateReads > 0 || session.control === 'out') session.hold = 'reading';
     else session.hold = 'failed';
 }
 
@@ -517,6 +534,9 @@ function ask(): void {
     // A state question still open (its read failed) is asked again with the
     // rows: "Read again" retries both.
     settleState();
+    // So is the state a control left not known: nothing but a state drawn
+    // says which session is open now.
+    if (session.control === 'unknown' && stateReads === 0) void readState();
     mark();
     void read();
 }
@@ -570,6 +590,16 @@ export function sessionMayHaveChanged(): void {
 }
 
 /**
+ * The recovery gate says where a control sent from this window stands (see
+ * session.control). It reads nothing by itself: the gate reads the state, and
+ * a state drawn for another session is what brings that session's rows.
+ */
+export function sessionControlStands(standing: '' | 'out' | 'unknown'): void {
+    session.control = standing;
+    mark();
+}
+
+/**
  * The event stream is down. Changes cannot be announced while it is, so the
  * rows are behind from now until it is back and they have been read again:
  * nothing read during the outage can be known to be current after it.
@@ -605,6 +635,7 @@ export function _resetSessionForTests(opts: { streamOpen?: boolean } = {}): void
     stateReads = 0;
     stateAgain = false;
     disagreed = false;
+    session.control = '';
     mark();
     ports = null;
     ids = {};

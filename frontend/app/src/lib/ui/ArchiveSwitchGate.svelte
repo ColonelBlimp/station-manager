@@ -87,6 +87,7 @@
                 <button
                     type="button"
                     class="btn btn-primary"
+                    data-archive-gate-reload
                     bind:this={reloadButton}
                     onclick={reloadNow}>Reload now</button
                 >

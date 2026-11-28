@@ -185,3 +185,17 @@ pick session (not just CQ runs), and slice B added the bag-and-drain queue
 `TestResolveFt8AutoWorkCallers_AbsentModeDoesNotArm` spec named above retired
 with the resolver; the licensing rule it pinned lives in the mode default
 (`internal/types/ft8_test.go`) plus `internal/ft8/adr0067_test.go` A1–A3.
+
+## Dated note — the engaged-only words replaced (operator ruling 2026-11-27)
+
+Decision 4's message for an engaged-only hit ("You started {call} earlier this
+session — nothing was logged. Working as new.") is replaced by **"Earlier
+attempt with {call} on {band}."** (W-0029 part 6, slice 3; the ruling and its
+reasons are in `docs/work/W-0029-operating-sessions.md`). With New and Continue
+in the Session panel an operating session can end while the tab lives on, the
+engaged set is kept for the tab and the archive, and the FT8 status that fills
+it names no operating session: so "this session" could be false, and a missing
+row never showed that nothing was logged. Neither message is shown while the
+Session is behind or a control's outcome is not known. The split by evidence,
+"already worked" being reserved for a logged row, and `allow_duplicate`'s
+over-marking direction all stand.

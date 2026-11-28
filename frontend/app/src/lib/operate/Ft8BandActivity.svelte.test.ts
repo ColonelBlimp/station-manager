@@ -31,7 +31,15 @@ import {
 } from './ft8.svelte';
 import { setFt8Enricher, resetFt8EnrichForTests } from './ft8Enrich.svelte';
 import { rig } from './rig.svelte';
-import { session } from './session.svelte';
+import {
+    session,
+    sessionStateDrawn,
+    refreshSessionRows,
+    sessionControlStands,
+    setSessionPorts,
+    _resetSessionForTests,
+    type SessionRowsReadLike,
+} from './session.svelte';
 import { _resetForTests as resetToasts, toastsState } from '../ui/toasts.svelte';
 import { noteDaemonDate, _resetDaemonClockForTests } from '../api/daemonClock.svelte';
 import type { DecodeReport } from '../api/ft8-sse';
@@ -70,7 +78,7 @@ beforeEach(() => {
     resetFt8EnrichForTests();
     resetToasts();
     _resetDaemonClockForTests();
-    session.qsos.length = 0;
+    _resetSessionForTests();
     rig.band = '20m';
     rig.cat = 'off';
     rig.freq = '14.255.000';
@@ -1447,7 +1455,12 @@ describe('Ft8BandActivity worked-vs-engaged toast wording', () => {
     const toastText = (): string => toastsState.items.map((t) => t.message).join(' | ');
 
     // WS1 — answer path, engaged-only: truthful wording, mechanism untouched.
-    it('an engaged-but-unlogged station toasts "started earlier — nothing was logged", not "already worked"', async () => {
+    // The words are the operator's ruling 5 of 2026-11-27, which replaced ADR
+    // 0065's ("You started {call} earlier this session — nothing was logged.
+    // Working as new."): the page cannot know which operating session an
+    // attempt was started under, nor that nothing was logged, and the message
+    // is shown before the daemon has accepted the start.
+    it('an engaged-but-unlogged station toasts "Earlier attempt with {call} on {band}.", and claims nothing more', async () => {
         setFt8OperatorCall('7Q5MLV');
         const got: Ft8AnswerArgs[] = [];
         armReady({ answerCq: (a) => (got.push(a), okResult()) });
@@ -1462,9 +1475,9 @@ describe('Ft8BandActivity worked-vs-engaged toast wording', () => {
         await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
         await flush();
 
-        expect(toastText()).toMatch(/started W1ABC earlier this session/);
-        expect(toastText()).toMatch(/nothing was logged/i);
-        expect(toastText()).not.toMatch(/already worked/i);
+        expect(toastsState.items.map((t) => t.message)).toEqual([
+            'Earlier attempt with W1ABC on 20m.',
+        ]);
         // The deliberate-repeat mechanism is NOT demoted by the wording split.
         expect(got).toHaveLength(1);
         expect(got[0].allowDuplicate).toBe(true);
@@ -1509,6 +1522,200 @@ describe('Ft8BandActivity worked-vs-engaged toast wording', () => {
 
         expect(toastText()).toMatch(/already worked/i);
         expect(toastText()).not.toMatch(/nothing was logged/i);
+    });
+
+    /*
+        While the page cannot vouch for the rows (W-0029 part 6, the operator's
+        ruling 5, 2026-11-27): the flag that lets a repeat be STORED goes on
+        being set from what is on screen, and no message is shown. A message
+        is a claim; the flag only ever lets a contact be stored, and without
+        it a repeat inside one minute is dropped unlogged.
+
+        The flag and each message are asserted separately: a rule that
+        silenced the message by dropping the evidence would also drop the flag.
+    */
+    describe('while the Session is behind, or a control is not settled', () => {
+        async function clickCq(): Promise<Ft8AnswerArgs[]> {
+            setFt8OperatorCall('7Q5MLV');
+            const got: Ft8AnswerArgs[] = [];
+            armReady({ answerCq: (a) => (got.push(a), okResult()) });
+            render(Ft8BandActivity);
+            ft8Link.onDecode(
+                decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
+            );
+            flushSync();
+            await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+            await flush();
+            return got;
+        }
+
+        it.each(['reading', 'failed', 'stream'] as const)(
+            'behind (%s), a logged station: the flag is sent and nothing is said',
+            async (hold) => {
+                logQso('W1ABC');
+                session.behind = true;
+                session.hold = hold;
+
+                const got = await clickCq();
+
+                expect(got).toHaveLength(1);
+                expect(got[0].allowDuplicate).toBe(true);
+                expect(toastsState.items).toEqual([]);
+            }
+        );
+
+        it('behind, an earlier attempt alone: the flag is sent and nothing is said', async () => {
+            engage('W1ABC');
+            session.behind = true;
+            session.hold = 'failed';
+
+            const got = await clickCq();
+
+            expect(got[0].allowDuplicate).toBe(true);
+            expect(toastsState.items).toEqual([]);
+        });
+
+        it.each(['out', 'unknown'] as const)(
+            'a control "%s" with no session shown, an earlier attempt alone: the flag is sent and nothing is said',
+            async (standing) => {
+                engage('W1ABC');
+                // No session is shown, so nothing is "behind": the control's
+                // standing is what says the session is not known.
+                sessionStateDrawn({
+                    archiveId: TEST_ARCHIVE,
+                    generation: 4,
+                    state: 'none',
+                    session: null,
+                });
+                sessionControlStands(standing);
+                expect(session.behind).toBe(false);
+
+                const got = await clickCq();
+
+                expect(got[0].allowDuplicate).toBe(true);
+                expect(toastsState.items).toEqual([]);
+            }
+        );
+
+        it('behind, a station never worked or started: no flag, and nothing is said', async () => {
+            logQso('K9ZZZ');
+            session.behind = true;
+            session.hold = 'reading';
+
+            const got = await clickCq();
+
+            expect(got[0].allowDuplicate).toBe(false);
+            expect(toastsState.items).toEqual([]);
+        });
+
+        // The two sequences Codex named (codex-288), with the real Session
+        // producing "behind" from what happened.
+        const S1 = '01a1f83c-da20-7000-8000-0000000000a1';
+        const S2 = '01a1f83c-da20-7000-8000-0000000000a2';
+        const rowOf = (call: string) => ({
+            uuid: '01a21282-0000-7000-8000-0000000000b1',
+            call,
+            timeOn: '052009',
+            band: '20m',
+            mode: 'FT8',
+            rstSent: '-07',
+            rstRcvd: '-10',
+            name: '',
+            country: '',
+            comment: '',
+            emailed: false,
+        });
+        const openState = (id: string, generation: number) => ({
+            archiveId: TEST_ARCHIVE,
+            generation,
+            state: 'open' as const,
+            session: {
+                id,
+                openedAt: '2026-11-25T09:15:00Z',
+                sittingStartedAt: '2026-11-25T09:15:00Z',
+            },
+        });
+        function daemonRows(): ((a: SessionRowsReadLike) => void)[] {
+            const sent: ((a: SessionRowsReadLike) => void)[] = [];
+            setSessionPorts({
+                readRows: () => new Promise<SessionRowsReadLike>((r) => sent.push(r)),
+                readState: () => Promise.resolve(true),
+                archive: () => TEST_ARCHIVE,
+            });
+            return sent;
+        }
+        const rowsOf = (id: string, generation: number, calls: string[]): SessionRowsReadLike => ({
+            kind: 'ok',
+            archiveId: TEST_ARCHIVE,
+            generation,
+            sessionId: id,
+            members: calls.map(rowOf),
+        });
+
+        it("a contact's call was edited and the rows are being read again: the old call sets the flag and is not said to be worked", async () => {
+            const sent = daemonRows();
+            sessionStateDrawn(openState(S1, 4));
+            sent[0](rowsOf(S1, 4, ['W1ABC']));
+            await flush();
+            expect(session.behind).toBe(false);
+
+            // The contact is edited elsewhere (its call corrected to W1ABD):
+            // the rows are asked for again, and that answer is held.
+            refreshSessionRows();
+            expect(session.behind).toBe(true);
+
+            const got = await clickCq();
+
+            expect(got[0].allowDuplicate).toBe(true);
+            expect(toastsState.items).toEqual([]);
+        });
+
+        it('a contact that ran across New, replayed, chosen again before its row is drawn: the flag is sent, and it is never "worked" nor "nothing was logged"', async () => {
+            const sent = daemonRows();
+            sessionStateDrawn(openState(S1, 4));
+            sent[0](rowsOf(S1, 4, []));
+            await flush();
+            // The contact starts in S1.
+            const running = {
+                active: true,
+                role: 'answerer',
+                their_call: 'W1ABC',
+                dial_freq_mhz: 14.074,
+            };
+            ft8Link.onQso(running, TEST_ARCHIVE);
+            // New: another session is drawn, and its rows are being read.
+            sessionStateDrawn(openState(S2, 6));
+            // The stream reconnects and replays the running contact; it then ends.
+            ft8Link.onQso(running, TEST_ARCHIVE);
+            ft8Link.onQso({ active: false }, TEST_ARCHIVE);
+            expect(session.behind).toBe(true);
+
+            const got = await clickCq();
+            expect(got[0].allowDuplicate).toBe(true);
+            expect(toastsState.items).toEqual([]);
+
+            // That attempt runs and ends too (the daemon confirms it, which
+            // releases the click's latch).
+            ft8Link.onQso(running, TEST_ARCHIVE);
+            flushSync();
+            ft8Link.onQso({ active: false }, TEST_ARCHIVE);
+            flushSync();
+            // The new session's rows are drawn, and the contact's row is not
+            // among them yet (it is stored after the exchange ends). What the
+            // page can say is that an attempt was made, and no more.
+            sent[1](rowsOf(S2, 6, []));
+            await flush();
+            expect(session.behind).toBe(false);
+            resetToasts();
+            await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+            await flush();
+
+            expect(got).toHaveLength(2);
+            expect(got[1].allowDuplicate).toBe(true);
+            expect(toastsState.items.map((t) => t.message)).toEqual([
+                'Earlier attempt with W1ABC on 20m.',
+            ]);
+        });
     });
 
     // WS4 retired with the curated stack (ADR 0067): ctrl+click now POSTs the

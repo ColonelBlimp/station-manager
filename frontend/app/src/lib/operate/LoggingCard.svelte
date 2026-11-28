@@ -53,6 +53,7 @@
     } from './contest.svelte';
     import { clearContestDupe, contestDupeShown } from './contestDupe.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
+    import { continueList } from './continueList.svelte';
 
     // Contact-details disclosure (grid / QTH / rig / RX power / notes to edit; QRZ
     // page link + looked-up email + CQ/ITU zone to read — all for the contacted
@@ -126,6 +127,9 @@
         // LOG it. The retired SPA's handleKeydown opened with exactly this
         // guard; the port dropped it (keyboard audit 2026-08-06, A27).
         if (sessionEdit.row !== null) return;
+        // Continue's list (W-0029 part 6) is a modal over this card as well,
+        // and closes itself on Escape: nothing here may act under it.
+        if (continueList.open) return;
         // Export modal open: it owns the keys. Esc closes it; the log/clear
         // shortcuts are inert so they can't act on the card behind the modal.
         if (operate.exportOpen) {

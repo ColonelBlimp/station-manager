@@ -137,7 +137,11 @@
             >
                 {@render railIcon(key)}
                 <span class="rail-label">{labels[key]}</span>
-                {#if key === 'session' && session.qsos.length > 0}
+                <!-- Not while a control's outcome is not known (W-0029 part 6, the
+                     operator's ruling of 2026-11-27): the rows may be of a session
+                     that is no longer open, and with the panel closed nothing
+                     beside this number could say so. -->
+                {#if key === 'session' && session.qsos.length > 0 && session.control !== 'unknown'}
                     {@render countBadge(
                         session.qsos.length,
                         `${session.qsos.length} QSO${session.qsos.length === 1 ? '' : 's'} this session`

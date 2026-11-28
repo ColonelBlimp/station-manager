@@ -15,7 +15,11 @@
 
     With no session open it shows no time (operator ruling 2026-11-25): not
     zeros, and never a count from when the window loaded. The header keeps its
-    place for it. Renders bare text so the header owns the visual treatment.
+    place for it. Nor while a control sent from this window has an outcome
+    the page could not find out (session.control "unknown"; the operator's
+    ruling of 2026-11-27): the sitting on screen may have ended, and a clock
+    still counting it would look current. Renders bare text so the header
+    owns the visual treatment.
     Hours grow past 99 for long sittings (Field Day / contest).
 -->
 <script lang="ts">
@@ -33,7 +37,7 @@
     onDestroy(() => clearInterval(tickerId));
 
     const elapsed = $derived.by(() => {
-        if (session.sittingStartedAt === null) return '';
+        if (session.sittingStartedAt === null || session.control === 'unknown') return '';
         const started = Date.parse(session.sittingStartedAt);
         if (Number.isNaN(started)) return '';
         // A start a moment ahead of the clock's last reading never shows a negative time.

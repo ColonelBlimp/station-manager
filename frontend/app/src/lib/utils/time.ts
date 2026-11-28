@@ -30,3 +30,32 @@ export function formatSessionStart(iso: string, now: Date = new Date()): string 
     const time = `${d.toISOString().slice(11, 16)} UTC`;
     return day === now.toISOString().slice(0, 10) ? time : `${day} ${time}`;
 }
+
+/**
+ * A closed session as a line of Continue's list (W-0029 part 6, the operator's
+ * ruling 3 of 2026-11-25): its first start, the end of its latest sitting and
+ * its count of contacts, in UTC: "2026-11-20 09:15 to 11:42 UTC · 37 contacts".
+ * The end's date is given when it is another day than the start's. A latest
+ * sitting with no end gets none here; and "an end not confirmed" is added when
+ * any sitting of the session ended without a confirmed exit.
+ */
+export function formatClosedSession(s: {
+    openedAt: string;
+    latestSittingEndedAt: string | null;
+    anEndUnconfirmed: boolean;
+    contactCount: number;
+}): string {
+    const stamp = (iso: string): [string, string] => {
+        const text = new Date(iso).toISOString();
+        return [text.slice(0, 10), text.slice(11, 16)];
+    };
+    const [day, time] = stamp(s.openedAt);
+    let span = `${day} ${time}`;
+    if (s.latestSittingEndedAt !== null) {
+        const [endDay, endTime] = stamp(s.latestSittingEndedAt);
+        span += endDay === day ? ` to ${endTime}` : ` to ${endDay} ${endTime}`;
+    }
+    const count = `${s.contactCount.toLocaleString()} contact${s.contactCount === 1 ? '' : 's'}`;
+    const unconfirmed = s.anEndUnconfirmed ? ' · an end not confirmed' : '';
+    return `${span} UTC · ${count}${unconfirmed}`;
+}

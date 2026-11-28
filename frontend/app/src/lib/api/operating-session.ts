@@ -3,9 +3,11 @@
     W-0029 part 4).
 
     GET /v1/operating-session is the state. POST /v1/operating-session/new and
-    /continue are the two answers to the recovery question: each carries the
-    generation of the state the page showed, and the archive the page is bound
-    to.
+    /continue are the two controls, sent as the answer to the recovery question
+    and from the Session panel: each carries a generation (of the state the
+    page showed, or of the list a session was chosen from), and the archive the
+    page is bound to. GET /v1/operating-session/closed is Continue's list, a
+    page at a time (part 6).
 
     Two rules shape the outcomes here.
       - A read that fails, or that the page cannot understand, is an ERROR. It
@@ -263,5 +265,119 @@ export async function fetchSessionMembers(): Promise<SessionMembersRead> {
         generation: body.generation,
         sessionId: body.session_id,
         members,
+    };
+}
+
+/** One closed session, as Continue's list gives it
+ *  (GET /v1/operating-session/closed). */
+export interface ClosedSession {
+    id: string;
+    /** The session's first start (RFC 3339, UTC). */
+    openedAt: string;
+    /** The start of its latest sitting: what the list is ordered by. */
+    latestSittingStartedAt: string;
+    /** The end of its latest sitting; null when that sitting has no end. */
+    latestSittingEndedAt: string | null;
+    /** A sitting of it, the last or an earlier one, ended without a confirmed exit. */
+    anEndUnconfirmed: boolean;
+    /** Its contacts that are not deleted. It can be 0. */
+    contactCount: number;
+}
+
+export type ClosedSessionsRead =
+    | {
+          kind: 'ok';
+          archiveId: string;
+          generation: number;
+          /** The default logbook the list is of; '' when the file has none. */
+          logbookUuid: string;
+          sessions: ClosedSession[];
+          /** There are sessions after the last of these. */
+          more: boolean;
+      }
+    /** A further page of a list that has changed since the page it follows:
+     *  the list is read again from its start. */
+    | { kind: 'stale' }
+    | { kind: 'error'; message: string };
+
+const UNREADABLE_LIST = 'The daemon answered with a list of sessions this page cannot read.';
+
+const isTime = (v: unknown): v is string => typeof v === 'string' && !Number.isNaN(Date.parse(v));
+
+function parseClosedSession(v: unknown): ClosedSession | null {
+    if (!isPlainObject(v)) return null;
+    if (!isUuidV7(v.id) || !isTime(v.opened_at) || !isTime(v.latest_sitting_started_at)) {
+        return null;
+    }
+    // The end is always stated: a time, or an explicit null for a sitting
+    // that has none. A line that leaves it out is not one the page can read.
+    const ended = v.latest_sitting_ended_at;
+    if (ended !== null && !isTime(ended)) return null;
+    if (typeof v.an_end_unconfirmed !== 'boolean') return null;
+    if (typeof v.contact_count !== 'number' || !Number.isInteger(v.contact_count)) return null;
+    if (v.contact_count < 0) return null;
+    return {
+        id: v.id,
+        openedAt: v.opened_at,
+        latestSittingStartedAt: v.latest_sitting_started_at,
+        latestSittingEndedAt: ended,
+        anEndUnconfirmed: v.an_end_unconfirmed,
+        contactCount: v.contact_count,
+    };
+}
+
+/**
+ * Read a page of Continue's list: at most `limit` closed sessions, the most
+ * recent first. With `after`, the page that follows that session in the list of
+ * that generation. An answer the page cannot understand in full is an ERROR,
+ * never a shorter list: a session left out would not be offered.
+ */
+export async function fetchClosedSessions(
+    limit: number,
+    after?: { sessionId: string; generation: number }
+): Promise<ClosedSessionsRead> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (after !== undefined) {
+        query.set('after', after.sessionId);
+        query.set('generation', String(after.generation));
+    }
+    const fetched = await safeFetch(`/v1/operating-session/closed?${query.toString()}`);
+    if (!fetched.ok) {
+        return { kind: 'error', message: 'Cannot reach the daemon.' };
+    }
+    const body = await readJsonBody(fetched.response);
+    if (!fetched.response.ok) {
+        if (isPlainObject(body) && body.code === 'operating_session_stale') {
+            return { kind: 'stale' };
+        }
+        return { kind: 'error', message: daemonErrorMessage(fetched.response.status, body) };
+    }
+    if (
+        !isPlainObject(body) ||
+        !isUuidV7(body.archive_id) ||
+        typeof body.generation !== 'number' ||
+        !Number.isInteger(body.generation) ||
+        typeof body.logbook_uuid !== 'string' ||
+        typeof body.more !== 'boolean' ||
+        !Array.isArray(body.sessions)
+    ) {
+        return { kind: 'error', message: UNREADABLE_LIST };
+    }
+    const sessions: ClosedSession[] = [];
+    for (const raw of body.sessions as unknown[]) {
+        const c = parseClosedSession(raw);
+        if (c === null) return { kind: 'error', message: UNREADABLE_LIST };
+        sessions.push(c);
+    }
+    // A page with no session that says there are more names nothing to ask
+    // for next, and would be drawn as "nothing to continue".
+    if (sessions.length === 0 && body.more) return { kind: 'error', message: UNREADABLE_LIST };
+    return {
+        kind: 'ok',
+        archiveId: body.archive_id,
+        generation: body.generation,
+        logbookUuid: body.logbook_uuid,
+        sessions,
+        more: body.more,
     };
 }
