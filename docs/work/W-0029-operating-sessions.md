@@ -7192,3 +7192,45 @@ overwrote `build/private/station-manager-dev.x86_64.rpm` and
 nothing of the daemon changed, going back would change only the page and the desktop
 program. Before this install Claude said that no copy of the station's data was known
 and offered to propose steps for one; none was asked for, and Claude knows of none taken.
+
+### Part 6, slice 3 at the station: the hosted verdict corrected, and what the daemon's log shows (2026-11-28, later the same day; uncommitted when written)
+
+Two additions to the section above, on the operator's word ("Do the two small items").
+
+**The hosted verdict. The section above is wrong about it.** It says the verdict on
+`adcc553a` "is to be read from its log and added to the record when it is in". There is
+none: run 46136603558 was **cancelled** at 11:10 UTC, in its Go race tests, with every
+step before that passed. Claude's own push of the install's record (`14c475c1`) cancelled
+it: the CI workflow cancels a run in progress on a branch when a newer push arrives
+(`concurrency`, `cancel-in-progress`). Claude had said it would report a verdict for each
+commit, and should have seen that the second push would cancel the first run. What stands
+in its place: run 46138550815 on `14c475c1`, completed with success, no step other than
+success, read from its own log (`node: v24.22.3`; C1d 19, Recovery 9, Close 18, Controls
+10). The two commits differ only in two Markdown files, so that run is of the code that
+was installed. Codex verified the same independently (codex-300).
+
+**What the daemon's own log shows of the station since the install.** Read from
+`smd.log`, which records each request with its time and answer; no request was made to
+the daemon, and nothing of any contact was read.
+- The app was opened twice, each time for under a minute: admitted at 13:03:39 CAT and
+  closed with a confirmed exit at 13:04:13; admitted again at 13:04:16 and closed with a
+  confirmed exit at 13:04:31.
+- At each opening the page read the session's state, its contacts and Continue's list
+  (the one-line read that says whether there is anything to continue), and every one of
+  those was answered 200. So the page that slice 3 built ran against the station's daemon
+  and its reads were served.
+- **Neither control has been used at the station:** there is no request to
+  `/v1/operating-session/new` or `/continue` in the log since the install, and no contact
+  has been submitted since it.
+- The station then lost power. `smd` started again at 15:12:32 CAT, on the installed
+  build. Its log after that start says the rig did not answer and one SM Cloud reconcile
+  failed; both are what a station just back from a power cut would be expected to show
+  (an inference, not looked into).
+
+**What the operator saw.** Still nothing reported beyond "deployed". The list of what has
+not been seen at the station, in the section above, stands as it is, with one line
+changed: at both openings the page read the session's contacts and Continue's list, which
+it does only when the state it has drawn is one the workspace is shown for (a session
+open, or none), and not when recovery is pending. So the workspace opened after this
+install, with no recovery question. That is read from the requests and from the page's
+code; nobody has said they saw it.
